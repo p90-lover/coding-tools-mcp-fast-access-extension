@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>coding-tools-mcp Extension</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>coding-tools-mcp</h1>
+        <p>Local MCP + OAuth → ChatGPT app · resumable MV3 sync</p>
+      </div>
+      <span id="stateBadge" class="badge">Ready</span>
+    </header>
+
+    <section>
+      <label for="pathMode">Executable path</label>
+      <select id="pathMode">
+        <option value="default">Default Coding Tools MCP path</option>
+        <option value="custom">Custom path…</option>
+      </select>
+      <input id="exePath" list="recentPaths" spellcheck="false" autocomplete="off" />
+      <datalist id="recentPaths"></datalist>
+      <p class="hint">Change this path if Coding Tools MCP is installed somewhere else.</p>
+    </section>
+
+    <details>
+      <summary>Advanced local path</summary>
+      <label for="profilesPath">profiles.json override</label>
+      <input id="profilesPath" spellcheck="false" placeholder="Leave empty to derive automatically" />
+      <p id="derivedPath" class="mono"></p>
+    </details>
+
+    <section>
+      <label for="workspace">Workspace</label>
+      <select id="workspace"><option value="">Auto / last workspace</option></select>
+    </section>
+
+    <section class="captured">
+      <div class="sectionTitle">Captured connection</div>
+      <label for="mcpUrl">MCP URL</label>
+      <input id="mcpUrl" readonly placeholder="Not captured yet" />
+
+      <label for="oauthClientId">OAuth Client ID</label>
+      <input id="oauthClientId" readonly placeholder="Not captured yet" />
+
+      <label for="oauthClientSecret">OAuth Client Secret</label>
+      <div class="secretRow">
+        <input id="oauthClientSecret" type="password" readonly placeholder="Not captured yet" />
+        <button id="toggleClientSecret" class="mini" type="button">Show</button>
+      </div>
+
+      <label for="oauthAuthorizeUrl">OAuth authorization link</label>
+      <input id="oauthAuthorizeUrl" readonly placeholder="Not captured yet" />
+
+      <label for="oauthTokenUrl">OAuth token link</label>
+      <input id="oauthTokenUrl" readonly placeholder="Not captured yet" />
+      <p id="oauthPasswordState" class="hint">Authorization password: not captured</p>
+    </section>
+
+    <label class="check">
+      <input id="replaceExisting" type="checkbox" checked disabled />
+      <span>Delete existing <strong>coding-tools-mcp</strong> before creating the replacement</span>
+    </label>
+
+    <label class="check">
+      <input id="autoAuthorize" type="checkbox" checked />
+      <span>Auto-authorize Coding Tools MCP OAuth using the captured local authorization password</span>
+    </label>
+
+    <div class="actions">
+      <button id="captureBtn" class="secondary">Capture local values</button>
+      <button id="syncBtn" class="primary">Sync + OAuth</button>
+    </div>
+
+    <div id="fileAccessWarning" class="warning hidden">
+      Local-file access is off. Chrome requires this permission before the extension can read Coding Tools MCP state.
+      <button id="extensionSettingsBtn" class="linkBtn">Open extension settings</button>
+    </div>
+
+    <div id="oauthPermissionWarning" class="warning hidden">
+      Custom OAuth host access is not granted. trycloudflare.com is covered by the built-in wildcard; other domains need one explicit grant.
+      <button id="grantOauthHostBtn" class="linkBtn">Grant current OAuth host</button>
+    </div>
+
+    <p id="diagnostics" class="mono">Checking permissions…</p>
+    <p class="hint">Manifest V3 service workers may sleep. v0.0.1 resumes safely, validates the rendered ChatGPT manager page, deletes exact-name apps, and recreates one clean replacement.</p>
+    <p id="status" class="status">Waiting.</p>
+    <button id="openAppsBtn" class="linkBtn bottom">Open ChatGPT personal plugins</button>
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

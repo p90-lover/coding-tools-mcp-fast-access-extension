@@ -1,0 +1,66 @@
+{
+  "manifest_version": 3,
+  "name": "coding-tools-mcp Extension",
+  "version": "0.0.1",
+  "minimum_chrome_version": "120",
+  "description": "Fast, conservative Coding Tools MCP sync that deletes any existing same-name ChatGPT app before creating a clean OAuth replacement.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "alarms",
+    "offscreen"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://*.chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://*.trycloudflare.com/*",
+    "file:///*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "coding-tools-mcp Extension",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://*.chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "page-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://*.chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.trycloudflare.com/*"
+      ],
+      "js": [
+        "oauth-content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

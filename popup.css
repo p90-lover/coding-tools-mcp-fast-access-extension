@@ -1,0 +1,37 @@
+:root {
+  color-scheme: light dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; width: 390px; background: Canvas; color: CanvasText; }
+.shell { padding: 16px; display: grid; gap: 14px; }
+header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+h1 { margin: 0; font-size: 18px; line-height: 1.2; }
+header p { margin: 4px 0 0; font-size: 12px; opacity: .68; }
+.badge { font-size: 11px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 999px; padding: 4px 8px; white-space: nowrap; }
+section, details { display: grid; gap: 7px; }
+label, summary { font-size: 12px; font-weight: 650; }
+summary { cursor: pointer; }
+input, select, button { font: inherit; }
+input, select { width: 100%; min-height: 36px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 9px; background: color-mix(in srgb, Canvas 96%, CanvasText 4%); color: CanvasText; padding: 8px 10px; font-size: 12px; }
+input[readonly] { opacity: .8; }
+.hint, .mono, .status { margin: 0; font-size: 11px; line-height: 1.45; opacity: .72; overflow-wrap: anywhere; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin-top: 4px; }
+.grid { gap: 10px; }
+.check { display: flex; align-items: flex-start; gap: 8px; font-weight: 500; line-height: 1.35; }
+.check input { width: 16px; min-height: 16px; margin: 1px 0 0; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+button { min-height: 36px; border-radius: 9px; padding: 8px 12px; border: 1px solid transparent; cursor: pointer; }
+button:disabled { opacity: .45; cursor: progress; }
+.primary { background: CanvasText; color: Canvas; }
+.secondary { background: transparent; color: CanvasText; border-color: color-mix(in srgb, CanvasText 18%, transparent); }
+.warning { border: 1px solid color-mix(in srgb, #c97700 45%, transparent); border-radius: 10px; padding: 10px; font-size: 11px; line-height: 1.4; }
+.hidden { display: none; }
+.linkBtn { background: transparent; color: LinkText; padding: 0; min-height: auto; text-align: left; }
+.warning .linkBtn { display: block; margin-top: 7px; }
+.bottom { justify-self: start; font-size: 11px; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.sectionTitle { font-size: 12px; font-weight: 750; margin-bottom: 2px; }
+.captured { padding: 11px; border: 1px solid color-mix(in srgb, CanvasText 12%, transparent); border-radius: 11px; background: color-mix(in srgb, Canvas 97%, CanvasText 3%); }
+.secretRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; align-items: center; }
+.mini { min-height: 36px; padding: 6px 10px; background: transparent; color: CanvasText; border-color: color-mix(in srgb, CanvasText 18%, transparent); font-size: 11px; }
