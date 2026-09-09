@@ -1,5 +1,5 @@
 (() => {
-  const HELPER_VERSION = '0.0.2';
+  const HELPER_VERSION = '0.0.1';
   if (globalThis.__codingToolsMcpExtensionV001Loaded) return;
   globalThis.__codingToolsMcpExtensionV001Loaded = true;
   const STRINGS = {
@@ -1105,7 +1105,14 @@
 
     const gone = await waitFor(() => !findGridArticle(appName), 9000, 300);
     if (!gone) return { removed: false, reason: 'still_present_after_delete' };
-    return { removed: true, reason: 'deleted', returnToPlugins: !isPersonalPluginsUrl(location.href) };
+    await dismissOpenMenus();
+    for (let i = 0; i < 4 && visibleDialogs().length; i += 1) {
+      if (!(await closeOpenDialog())) break;
+    }
+    await clearPluginSearch();
+    // Always hand create back to the worker. Staying on this page leaves the Manage overlay
+    // and leftover name text, which would look "still present" and skip recreate.
+    return { removed: true, reason: 'deleted', returnToPlugins: true };
   }
 
   async function removeExistingStrict(appName, inspection = null) {
@@ -1354,9 +1361,16 @@
     // is still in the DOM and still passes visible(), so createControl() happily returns it — but it
     // sits under the modal: elementFromPoint at its centre returns the overlay, and a real click
     // never lands. Close any leftover modal before looking for it.
-    for (let i = 0; i < 2 && visibleDialogs().length && !createFormPresent(); i += 1) {
-      if (!(await closeOpenDialog())) break;
-      await sleep(600);
+    await dismissOpenMenus();
+    for (let i = 0; i < 5 && visibleDialogs().length && !createFormPresent(); i += 1) {
+      if (!(await closeOpenDialog())) {
+        try {
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+        } catch {}
+        await sleep(200);
+        if (visibleDialogs().length) break;
+      }
+      await sleep(400);
     }
     if (createFormPresent()) return true;
     // The create control paints after the plugin list, later than the search field, so poll for it
@@ -1990,23 +2004,26 @@
       }
 
       await sleep(400);
-
-      // Delete lands on the manage panel. Create only works on the plugins list, so hand that
-      // navigation back to the worker instead of filling a form on the panel.
-      if (removal.returnToPlugins || !isPersonalPluginsUrl(location.href)) {
-        activePrepareJobId = '';
-        return {
-          ok: true,
-          continue: 'return_to_plugins',
-          removed: true,
-          stage: 'removed_old_app',
-          message: `Deleted ${payload.appName}. Going back to the plugins page to create the replacement.`,
-        };
+      await dismissOpenMenus();
+      for (let i = 0; i < 4 && visibleDialogs().length; i += 1) {
+        if (!(await closeOpenDialog())) break;
       }
+      await clearPluginSearch();
+
+      // Delete lands on the manage panel. Create only works on a clean plugins list.
+      activePrepareJobId = '';
+      return {
+        ok: true,
+        continue: 'return_to_plugins',
+        removed: true,
+        stage: 'removed_old_app',
+        message: `Deleted ${payload.appName}. Going back to the plugins page to create the replacement.`,
+      };
     }
 
-    // Last line of defence: never create while this app is still on the plugins page.
-    if (findGridArticle(payload.appName) || installedNameVisible(payload.appName)) {
+    // Last line of defence: never create while a real grid card is still on the page.
+    // Leftover name text in search/sidebar/toast is not a card and must not block recreate.
+    if (findGridArticle(payload.appName)) {
       activePrepareJobId = '';
       return {
         ok: false,
@@ -2093,6 +2110,12 @@
     if (!(await waitForPersonalPluginsPage())) {
       return { ok: false, stage: 'wrong_page', message: 'Replacement creation must start from a verified ChatGPT Plugins/Apps manager page.' };
     }
+    await dismissOpenMenus();
+    for (let i = 0; i < 4 && visibleDialogs().length; i += 1) {
+      if (!(await closeOpenDialog())) break;
+    }
+    await clearPluginSearch();
+    await sleep(350);
     const opened = await openCreateFormStrict();
     if (!opened) {
       return { ok: false, stage: 'open_create', message: 'Could not identify the Create control beside Search plugins. No app-row + button was clicked.', inventory: pageInventory() };

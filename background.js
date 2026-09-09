@@ -10,7 +10,7 @@ import {
   oauthUrlsFromMcpUrl,
 } from './lib.mjs';
 
-const HELPER_VERSION = '0.0.2';
+const HELPER_VERSION = '0.0.3';
 const CHATGPT_HOME_URL = 'https://chatgpt.com/';
 const CHATGPT_PERSONAL_PLUGINS_URL = 'https://chatgpt.com/plugins?view=personal';
 const CHATGPT_PATTERNS = ['https://chatgpt.com/*', 'https://*.chatgpt.com/*', 'https://chat.openai.com/*'];

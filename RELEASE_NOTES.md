@@ -1,7 +1,7 @@
-﻿# coding-tools-mcp-extension v0.0.2
+﻿# coding-tools-mcp-extension v0.0.3
 
-Safer Sync against ChatGPT personal plugins.
+Delete now always continues into recreate.
 
-Sync now reuses the open plugins tab, finds the exact `coding-tools-mcp` grid card, and deletes only through that card's Manage menu before recreate. If the card is still present, create is refused. Wrong menus such as Pets, conversation options, or project options are rejected, and Sync Escapes instead of clicking elsewhere.
+After Sync deletes `coding-tools-mcp`, it closes leftover Manage UI, clears the plugins search box, returns to the personal plugins page, and opens Create. Stale name text in search/sidebar/toast no longer blocks that step.
 
-Load the unpacked folder from this release (or the attached zip), reload the extension in `chrome://extensions`, then run Sync + OAuth once.
+Reload the unpacked extension (or install the zip), then run Sync + OAuth once.

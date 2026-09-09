@@ -1,5 +1,11 @@
 ﻿# Changelog
 
+## v0.0.3 - 2026-09-10
+
+- After a successful delete, always return to the personal plugins page and create the replacement.
+- Clear leftover Manage dialogs and the plugins search field so stale name text cannot block recreate.
+- Block create only when a real grid card remains, not leftover sidebar/search/toast text.
+
 ## v0.0.2 - 2026-09-09
 
 - Reuse an already-open ChatGPT personal plugins tab instead of opening extra tabs on slow list renders.
