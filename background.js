@@ -10,7 +10,7 @@ import {
   oauthUrlsFromMcpUrl,
 } from './lib.mjs';
 
-const HELPER_VERSION = '0.0.1';
+const HELPER_VERSION = '0.0.2';
 const CHATGPT_HOME_URL = 'https://chatgpt.com/';
 const CHATGPT_PERSONAL_PLUGINS_URL = 'https://chatgpt.com/plugins?view=personal';
 const CHATGPT_PATTERNS = ['https://chatgpt.com/*', 'https://*.chatgpt.com/*', 'https://chat.openai.com/*'];
@@ -309,28 +309,27 @@ async function findOrOpenChatGptTab(preferredTabId = null) {
 }
 
 async function openPersonalPluginsTab(preferredTabId = null, { forceFresh = false } = {}) {
-  if (forceFresh) {
-    const fresh = await chrome.tabs.create({ url: CHATGPT_PERSONAL_PLUGINS_URL, active: true });
-    if (fresh?.id) {
-      await waitForTabReady(fresh.id);
-      return fresh.id;
-    }
+  const existing = await chrome.tabs.query({ url: CHATGPT_PATTERNS });
+  const alreadyOpen = existing.find((item) => isBasePersonalPluginsUrl(item.url || ''))
+    || existing.find((item) => isPotentialPluginsManagerUrl(item.url || ''));
+  if (alreadyOpen?.id && !forceFresh) {
+    const focused = await chrome.tabs.update(alreadyOpen.id, { active: true });
+    return focused?.id || alreadyOpen.id;
   }
+
   let tab = null;
   if (preferredTabId) {
     tab = await chrome.tabs.get(preferredTabId).catch(() => null);
   }
   if (!tab?.id) {
-    const tabs = await chrome.tabs.query({ url: CHATGPT_PATTERNS });
-    tab = tabs.find((item) => item.active) || tabs[0] || null;
+    tab = existing.find((item) => item.active) || existing[0] || null;
   }
   if (!tab?.id) {
     tab = await chrome.tabs.create({ url: CHATGPT_PERSONAL_PLUGINS_URL, active: true });
-  } else if (isBasePersonalPluginsUrl(tab.url || '') || isPotentialPluginsManagerUrl(tab.url || '')) {
-    // Already there: only focus it. Reloading would discard in-page state that cannot be recovered
-    // — most importantly the post-creation connect prompt, which is shown once and never again.
+  } else if (isBasePersonalPluginsUrl(tab.url || '')) {
     tab = await chrome.tabs.update(tab.id, { active: true });
   } else {
+    // A chat tab is not the plugins page. Always navigate there before detect or create.
     tab = await chrome.tabs.update(tab.id, { url: CHATGPT_PERSONAL_PLUGINS_URL, active: true });
   }
   if (!tab?.id) throw new Error('Unable to open ChatGPT personal plugins.');
@@ -478,7 +477,7 @@ async function drivePrepare(job) {
     if (RECOVERABLE_PREPARE_STAGES.has(prepared?.stage) && attempts < MAX_PREPARE_ATTEMPTS) {
       // A tab that answered /plugins with a restored conversation will keep doing so; escalate to a
       // brand-new tab for the retry rather than asking the same one again.
-      if (prepared?.stage === 'list_not_rendered' || prepared?.stage === 'wrong_page') latest.freshTabRequired = true;
+      if (prepared?.stage === 'wrong_page') latest.freshTabRequired = true;
       // A navigation/redirect race is not a configuration problem. Stay in the preparing phase so
       // the watchdog alarm or the next page event retries instead of ending the job.
       latest.phase = 'preparing';

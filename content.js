@@ -1,5 +1,5 @@
 (() => {
-  const HELPER_VERSION = '0.0.1';
+  const HELPER_VERSION = '0.0.2';
   if (globalThis.__codingToolsMcpExtensionV001Loaded) return;
   globalThis.__codingToolsMcpExtensionV001Loaded = true;
   const STRINGS = {
@@ -593,6 +593,13 @@
   }
 
   async function inspectExistingApp(appName) {
+    await clearPluginSearch();
+    const gridCard = await waitFor(() => findGridArticle(appName), 2200, 150);
+    if (gridCard) {
+      return { found: true, endpoint: '', appNode: gridCard, card: gridCard, detailsOpened: false, source: 'grid' };
+    }
+    // Do not treat a sidebar chat or composer mention as the plugin, and do not click around to find it.
+    return { found: false, endpoint: '', appNode: null, card: null, detailsOpened: false };
     const appNode = findExactAppNode(appName);
     if (!appNode) return { found: false, endpoint: '', appNode: null, card: null, detailsOpened: false };
     const card = appContainerFor(appNode, appName);
@@ -692,14 +699,30 @@
     return allClickable(scope).find((el) => textMatches(el, STRINGS.pluginActions, false)) || null;
   }
 
+  function isUnsafeChrome(el) {
+    return Boolean(el?.closest?.('nav, aside, [role="navigation"], [data-testid^="history"], [data-testid*="composer"], form'));
+  }
+
   function pluginGridArticles() {
-    const main = document.querySelector('main') || document.body;
-    return [...main.querySelectorAll('article, [role="article"]')]
-      .filter((el) => {
-        if (!visible(el) || el.closest('nav, aside, [role="navigation"]')) return false;
-        const rect = el.getBoundingClientRect();
-        return rect.width >= 140 && rect.height >= 72 && rect.width <= 760 && rect.height <= 560;
-      });
+    const main = document.querySelector('main');
+    const roots = main ? [main] : [];
+    const found = [];
+    const add = (el) => {
+      if (!el || found.includes(el) || !visible(el) || isUnsafeChrome(el)) return;
+      const rect = el.getBoundingClientRect();
+      // Sidebar rows are about 233x36. Real plugin cards are taller.
+      if (rect.width < 180 || rect.height < 72 || rect.width > 760 || rect.height > 560) return;
+      found.push(el);
+    };
+    for (const root of roots) {
+      for (const el of root.querySelectorAll('article, [role="article"]')) add(el);
+      for (const el of root.querySelectorAll('div, li, a, section')) {
+        const display = getComputedStyle(el).display;
+        if (display !== 'grid' && display !== 'inline-grid') continue;
+        for (const child of el.children) add(child);
+      }
+    }
+    return found;
   }
 
   function exactNameIn(article, appName) {
@@ -723,8 +746,210 @@
     return titles.some((title) => title !== wanted);
   }
 
+  function pluginListRoot() {
+    // The plugins search is right-aligned. Grid cards sit to its left, so the
+    // list root is main, not the search field's column.
+    return document.querySelector('main') || document.body;
+  }
+
+  function isSidebarRow(el) {
+    if (!el) return true;
+    if (isUnsafeChrome(el)) return true;
+    if (el.closest?.('input, textarea, [role="search"]')) return true;
+    const rect = el.getBoundingClientRect();
+    return rect.left < 220 && rect.width <= 280 && rect.height <= 56;
+  }
+
+  function inPluginList(el) {
+    if (!el || isSidebarRow(el)) return false;
+    const root = pluginListRoot();
+    if (!root?.contains(el)) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width >= 8 && rect.height >= 8;
+  }
+
+  function labelIsApp(value, appName) {
+    const wanted = canonicalAppIdentity(appName);
+    const got = canonicalAppIdentity(value);
+    if (!wanted || !got) return false;
+    if (got === wanted) return true;
+    return got.includes(wanted) && got.length <= wanted.length + 24;
+  }
+
+  function pluginNameNodes(appName) {
+    const wanted = canonicalAppIdentity(appName);
+    const root = pluginListRoot();
+    if (!wanted || !root) return [];
+    const hits = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (canonicalAppIdentity(node.nodeValue) !== wanted) continue;
+      const parent = node.parentElement;
+      if (!parent || !visible(parent) || !inPluginList(parent)) continue;
+      if (parent.closest('input, textarea')) continue;
+      hits.push(parent);
+    }
+    if (hits.length) return hits;
+    return [...root.querySelectorAll('h1, h2, h3, h4, a, button, [aria-label], [title], img')].filter((el) => {
+      if (!visible(el) || !inPluginList(el)) return false;
+      const own = [
+        el.getAttribute('aria-label'),
+        el.getAttribute('title'),
+        el.getAttribute('alt'),
+        el.innerText || el.textContent,
+      ].join(' ');
+      return labelIsApp(own, appName);
+    });
+  }
+
+  function cardAroundName(nameEl, appName) {
+    const root = pluginListRoot();
+    let current = nameEl;
+    let best = null;
+    for (let i = 0; i < 12 && current && current !== root && current !== document.body; i += 1, current = current.parentElement) {
+      if (isUnsafeChrome(current)) break;
+      if (!inPluginList(current)) continue;
+      const rect = current.getBoundingClientRect();
+      if (rect.width < 160 || rect.height < 44 || rect.height > 640 || rect.width > 1400) continue;
+      if (!exactNameIn(current, appName) || otherAppTitleIn(current, appName)) continue;
+      best = current;
+      if (dotsButtonIn(current, appName)) return current;
+    }
+    return best;
+  }
+
   function findGridArticle(appName) {
-    return pluginGridArticles().find((article) => exactNameIn(article, appName) && !otherAppTitleIn(article, appName)) || null;
+    const tagged = pluginGridArticles().find((article) => exactNameIn(article, appName) && !otherAppTitleIn(article, appName) && inPluginList(article));
+    if (tagged) return tagged;
+
+    const hits = pluginNameNodes(appName);
+    for (const nameEl of hits) {
+      const card = cardAroundName(nameEl, appName);
+      if (!card) continue;
+      const dots = dotsButtonIn(card, appName) || dotsNearName(nameEl, card);
+      if (dots && card.contains(dots) && !isForbiddenDotsTarget(dots)) return card;
+    }
+    // No clickable card menu: do not invent a fake card from a bare name hit.
+    return null;
+  }
+
+  function installedNameVisible(appName) {
+    return pluginNameNodes(appName).length > 0;
+  }
+
+  async function clearPluginSearch() {
+    const input = pluginSearchInput();
+    if (!input || !input.value) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    if (setter) setter.call(input, '');
+    else input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(250);
+    return true;
+  }
+
+  async function filterPluginSearch(appName) {
+    const input = pluginSearchInput();
+    if (!input || !appName) return false;
+    if (canonicalAppIdentity(input.value) === canonicalAppIdentity(appName)) return true;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    try { input.focus(); } catch {}
+    if (setter) setter.call(input, appName);
+    else input.value = appName;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(450);
+    return true;
+  }
+
+  async function hoverCard(el) {
+    if (!el) return;
+    try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch {}
+    const rect = el.getBoundingClientRect();
+    const common = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: rect.left + Math.min(28, Math.max(8, rect.width / 3)),
+      clientY: rect.top + Math.min(20, Math.max(8, rect.height / 2)),
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+    };
+    for (const type of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'mousemove']) {
+      try {
+        const Ctor = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+        el.dispatchEvent(new Ctor(type, common));
+      } catch {}
+    }
+    await sleep(200);
+  }
+
+  function isForbiddenDotsTarget(el) {
+    if (!el) return true;
+    if (isUnsafeChrome(el)) return true;
+    const label = normalize([
+      el.getAttribute('aria-label'),
+      el.getAttribute('title'),
+      el.getAttribute('data-testid'),
+      el.innerText || el.textContent,
+    ].filter(Boolean).join(' '));
+    // Conversation / project / Pets / sidebar chrome must never receive the delete click.
+    return /(history-item|conversation|pin |project|pets?|寵物|宠物|composer|sidebar|profile|account|new chat|organize)/.test(label)
+      || Boolean(el.closest('[data-testid^="history"], [data-testid*="composer"], nav, aside'));
+  }
+
+  function dotsNearName(nameEl, scope = null) {
+    if (!nameEl) return null;
+    const root = scope || pluginListRoot();
+    if (!root) return null;
+    const nameRect = nameEl.getBoundingClientRect();
+    const buttons = allClickable(root).filter((el) => {
+      if (scope && !scope.contains(el)) return false;
+      if (el.closest('[role="menu"], [role="menuitem"], [role="dialog"]')) return false;
+      if (isForbiddenDotsTarget(el)) return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 12 || rect.height < 12 || rect.width > 56 || rect.height > 56) return false;
+      const sameRow = Math.abs((rect.top + rect.height / 2) - (nameRect.top + nameRect.height / 2)) < 40;
+      // Stay on the card: only a short distance to the right of the name.
+      return sameRow && rect.left >= nameRect.left - 4 && rect.left <= nameRect.right + 120;
+    });
+    if (!buttons.length) return null;
+    const labelled = buttons.find((el) => {
+      const text = normalize(el.innerText || el.textContent);
+      const aria = normalize(el.getAttribute('aria-label'));
+      const title = normalize(el.getAttribute('title'));
+      return ['…', '...', '⋯', '⋮'].includes(text)
+        || ['…', '...', '⋯', '⋮'].includes(aria)
+        || DOT_LABEL.test(aria)
+        || DOT_LABEL.test(title)
+        || el.getAttribute('aria-haspopup') === 'menu';
+    });
+    if (labelled) return labelled;
+    if (buttons.length !== 1) return null;
+    return buttons[0];
+  }
+
+  async function dismissOpenMenus() {
+    for (let i = 0; i < 3 && newestMenu(); i += 1) {
+      try {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+      } catch {}
+      await sleep(120);
+    }
+  }
+
+  function pluginCardMenuLooksValid(menu) {
+    if (!menu) return false;
+    const items = allClickable(menu).map((el) => normalize(el.innerText || el.textContent || el.getAttribute('aria-label')));
+    const joined = items.join(' | ');
+    if (/(^|\|)(pets?|寵物|宠物|pin |unpin|share|archive|rename|delete chat|new chat)(\||$)/.test(joined)
+      && !/(manage|管理|delete|刪除|删除)/.test(joined)) {
+      return false;
+    }
+    return items.some((label) => ['manage', '管理'].includes(label) || label.includes('manage') || label.includes('管理'));
   }
 
   const DOT_LABEL = /(more|options|menu|actions|更多|選項|选项|操作|選單|菜单)/;
@@ -744,6 +969,7 @@
       if (!visible(el)) return false;
       if (!scope.contains(el)) return false;
       if (el.closest('[role="menu"], [role="menuitem"]')) return false;
+      if (isForbiddenDotsTarget(el)) return false;
       if (!pointInside(el, box)) return false;
       return true;
     });
@@ -766,9 +992,20 @@
         || el.getAttribute('aria-haspopup') === 'menu';
     });
     if (labelled) return labelled;
-    const iconOnly = buttons.filter((el) => !normalize(el.innerText || el.textContent));
-    if (iconOnly.length !== 1) return null;
-    return iconOnly[0];
+    const iconOnly = buttons.filter((el) => {
+      if (normalize(el.innerText || el.textContent)) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width <= 56 && rect.height <= 56 && rect.width >= 12;
+    });
+    if (!iconOnly.length) return null;
+    if (iconOnly.length === 1) return iconOnly[0];
+    return iconOnly.sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      const aScore = (box.right - (ar.left + ar.width / 2)) + Math.max(0, ar.top - box.top);
+      const bScore = (box.right - (br.left + br.width / 2)) + Math.max(0, br.top - box.top);
+      return aScore - bScore;
+    })[0];
   }
 
   function newestMenu() {
@@ -801,18 +1038,38 @@
    */
   async function deleteViaManage(appName) {
     if (!isPersonalPluginsUrl(location.href)) return { removed: false, reason: 'wrong_page' };
-    const article = findGridArticle(appName);
+    await clearPluginSearch();
+    let article = await waitFor(() => findGridArticle(appName), 2200, 150);
+    if (!article) {
+      await filterPluginSearch(appName);
+      article = await waitFor(() => findGridArticle(appName), 1200, 150);
+    }
     if (!article) return { removed: false, reason: 'grid_article_not_found' };
 
-    try { article.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch {}
-    await sleep(250);
-
-    const dots = dotsButtonIn(article, appName);
-    if (!dots || !article.contains(dots)) return { removed: false, reason: 'app_menu_not_found' };
+    // Fail closed: only click ⋯ that lives inside this exact card. Never hunt across the page —
+    // that is how Pets / chat options / project menus get opened.
+    if (!exactNameIn(article, appName) || otherAppTitleIn(article, appName)) {
+      return { removed: false, reason: 'card_name_ambiguous' };
+    }
+    await hoverCard(article);
+    const nameEl = pluginNameNodes(appName).find((el) => article.contains(el) || article === el) || null;
+    let dots = dotsButtonIn(article, appName);
+    if (!dots && nameEl) dots = dotsNearName(nameEl, article);
+    if (!dots || !article.contains(dots) || isForbiddenDotsTarget(dots)) {
+      return { removed: false, reason: 'app_menu_not_found' };
+    }
+    await dismissOpenMenus();
     await pointerActivateMenu(dots);
 
-    const manage = await waitFor(() => menuItemNamed(['manage', '管理']), 6000, 200);
-    if (!manage) return { removed: false, reason: 'manage_not_reachable' };
+    const manage = await waitFor(() => {
+      const menu = newestMenu();
+      if (!pluginCardMenuLooksValid(menu)) return null;
+      return menuItemNamed(['manage', '管理']);
+    }, 4000, 150);
+    if (!manage) {
+      await dismissOpenMenus();
+      return { removed: false, reason: 'manage_not_reachable' };
+    }
 
     const beforeDialogs = new Set(visibleDialogs());
     await pointerActivateMenu(manage);
@@ -853,7 +1110,7 @@
 
   async function removeExistingStrict(appName, inspection = null) {
     const currentInspection = inspection?.found ? inspection : await inspectExistingApp(appName);
-    if (!currentInspection.found) return { removed: false, reason: 'not_found' };
+    if (!currentInspection.found && !installedNameVisible(appName)) return { removed: false, reason: 'not_found' };
 
     // Fail closed. Never fall through to a page-wide click if the exact card is missing.
     const viaManage = await deleteViaManage(appName);
@@ -1044,8 +1301,9 @@
   ];
 
   function pluginsPageRenderState(appName) {
-    if (findExactAppNode(appName)) return 'app';
+    if (findGridArticle(appName) || installedNameVisible(appName)) return 'app';
     if (pluginCardLinks().length) return 'cards';
+    // The search field paints before the grid. It is not proof the app is absent.
 
     // Empty lists render no cards or search box in some ChatGPT builds. An explicit empty-state
     // message plus an exact create control is positive evidence that loading has completed.
@@ -1073,7 +1331,7 @@
       if (!document.body || !normalize(document.body.textContent)) return null;
       const state = pluginsPageRenderState(appName);
       return state === 'unknown' ? null : state;
-    }, 5000, 300);
+    }, 1500, 150);
     return listed || pluginsPageRenderState(appName);
   }
 
@@ -1606,7 +1864,7 @@
           // Sign in control that starts the OAuth round trip. The job must stay alive through it,
           // otherwise the service worker has no active job and refuses to hand the authorization
           // password to the OAuth page helper.
-          if (normalize(state.authType) === 'oauth') {
+          if (normalize(state.authType) === 'oauth' && findGridArticle(appName)) {
             const connected = await openConnectFlow(appName);
             if (connected.opened) {
               await finish({
@@ -1685,7 +1943,7 @@
     // Fail closed. "No cards rendered" is not evidence the app is absent — it is evidence the list
     // never loaded, and creating on that assumption is exactly how duplicates were produced. Retry
     // in a fresh tab first; only accept an unrendered list as genuinely empty once retries are spent.
-    if (readiness === 'unknown' && (payload.attempt || 0) < 3) {
+    if (readiness === 'unknown' && (payload.attempt || 0) < 3 && !isPersonalPluginsUrl(location.href)) {
       activePrepareJobId = '';
       return {
         ok: false,
@@ -1696,8 +1954,9 @@
     }
 
     const inspection = await inspectExistingApp(payload.appName);
+    const installed = inspection.found || installedNameVisible(payload.appName);
 
-    if (inspection.found) {
+    if (installed) {
       // Every sync is a clean replacement, even when the endpoint is unchanged.
       // Reading the old endpoint is NOT a precondition for removal: an app carrying this name is
       // replaced whether or not its /mcp URL can be read, because an unreadable app is exactly the
@@ -1746,13 +2005,13 @@
       }
     }
 
-    // Last line of defence: never create while this app's grid card is still on the page.
-    if (findGridArticle(payload.appName)) {
+    // Last line of defence: never create while this app is still on the plugins page.
+    if (findGridArticle(payload.appName) || installedNameVisible(payload.appName)) {
       activePrepareJobId = '';
       return {
         ok: false,
         stage: 'remove',
-        message: `${payload.appName} is still present after the removal step, so creating now would produce a duplicate. Nothing was created.`,
+        message: `${payload.appName} is still present, so creating now would skip delete and produce a duplicate. Nothing was created.`,
         inventory: pageInventory(),
       };
     }
@@ -1939,7 +2198,7 @@
       // The app can already exist and merely be unauthorized — e.g. creation succeeded but the
       // connect control was not reachable yet. Retry it here so a live job recovers on its own
       // instead of idling until the watchdog gives up.
-      if (normalize(message.authType) === 'oauth' && findExactAppNode(appName)) {
+      if (normalize(message.authType) === 'oauth' && isPersonalPluginsUrl(location.href) && findGridArticle(appName)) {
         openConnectFlow(appName)
           .then((result) => sendResponse({ ok: true, stage: result.opened ? 'authorizing' : 'finalizer_resumed', connect: result }))
           .catch(() => sendResponse({ ok: true, stage: 'finalizer_resumed' }));

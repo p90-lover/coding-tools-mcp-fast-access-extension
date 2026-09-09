@@ -1,4 +1,12 @@
-# Changelog
+﻿# Changelog
+
+## v0.0.2 - 2026-09-09
+
+- Reuse an already-open ChatGPT personal plugins tab instead of opening extra tabs on slow list renders.
+- Delete only through the exact `coding-tools-mcp` grid card: ⋯ → Manage → ⋯ → Delete.
+- Block create while that card is still present, so Sync cannot skip delete and spawn a duplicate.
+- Reject wrong ⋯ targets such as conversation, project, and Pets menus; Escape and stop if Manage is missing.
+- Tighten plugin-grid detection so the right-aligned search field no longer hides cards to its left.
 
 ## v0.0.1 - 2026-09-08
 

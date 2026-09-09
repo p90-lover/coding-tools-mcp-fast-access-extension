@@ -1,7 +1,7 @@
-# coding-tools-mcp-extension v0.0.1
+﻿# coding-tools-mcp-extension v0.0.2
 
-This release focuses on faster and more accurate ChatGPT page actions.
+Safer Sync against ChatGPT personal plugins.
 
-The extension now requires stronger evidence before treating a page as the Plugins/Apps manager, ignoring plugin links found in navigation or ordinary conversation content. Renamed manager routes are allowed to finish rendering and are validated using DOM structure instead of URL alone. DOM mutations wake pending actions immediately, while bounded timers remain as a fallback. Explicit empty-list states are recognized immediately, and unsafe missing/ambiguous controls continue to fail closed without being clicked.
+Sync now reuses the open plugins tab, finds the exact `coding-tools-mcp` grid card, and deletes only through that card's Manage menu before recreate. If the card is still present, create is refused. Wrong menus such as Pets, conversation options, or project options are rejected, and Sync Escapes instead of clicking elsewhere.
 
-Regression coverage includes sidebar false positives, conversation-link false positives, late-rendered renamed routes, mutation-driven readiness, empty-list readiness, and bounded negative-path timeouts.
+Load the unpacked folder from this release (or the attached zip), reload the extension in `chrome://extensions`, then run Sync + OAuth once.
