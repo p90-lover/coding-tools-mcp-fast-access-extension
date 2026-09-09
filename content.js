@@ -1,5 +1,5 @@
 (() => {
-  const HELPER_VERSION = '0.0.1';
+  const HELPER_VERSION = '0.0.4';
   if (globalThis.__codingToolsMcpExtensionV001Loaded) return;
   globalThis.__codingToolsMcpExtensionV001Loaded = true;
   const STRINGS = {
@@ -1117,7 +1117,14 @@
 
   async function removeExistingStrict(appName, inspection = null) {
     const currentInspection = inspection?.found ? inspection : await inspectExistingApp(appName);
-    if (!currentInspection.found && !installedNameVisible(appName)) return { removed: false, reason: 'not_found' };
+    const card = findGridArticle(appName);
+    if (!card) {
+      // Already deleted. Let Sync create instead of failing closed on a sidebar name match.
+      return { removed: true, reason: 'already_absent', returnToPlugins: true };
+    }
+    if (!currentInspection.found) {
+      return { removed: true, reason: 'already_absent', returnToPlugins: true };
+    }
 
     // Fail closed. Never fall through to a page-wide click if the exact card is missing.
     const viaManage = await deleteViaManage(appName);
@@ -1308,9 +1315,11 @@
   ];
 
   function pluginsPageRenderState(appName) {
-    if (findGridArticle(appName) || installedNameVisible(appName)) return 'app';
+    if (findGridArticle(appName)) return 'app';
     if (pluginCardLinks().length) return 'cards';
-    // The search field paints before the grid. It is not proof the app is absent.
+    // On the personal plugins URL, the search field means the list shell rendered.
+    // If no grid card matches this app, treat it as absent and allow create.
+    if (isPersonalPluginsUrl(location.href) && pluginSearchInput()) return 'cards';
 
     // Empty lists render no cards or search box in some ChatGPT builds. An explicit empty-state
     // message plus an exact create control is positive evidence that loading has completed.
@@ -1967,8 +1976,16 @@
       };
     }
 
+    // Already on personal plugins with no matching grid card: treat as deleted and create.
+    if (!findGridArticle(payload.appName) && isPersonalPluginsUrl(location.href) && (readiness === 'cards' || readiness === 'empty' || readiness === 'unknown' || pluginSearchInput())) {
+      // Fall through to create below. Do not invent an installed app from sidebar text.
+    }
+
+    await clearPluginSearch();
     const inspection = await inspectExistingApp(payload.appName);
-    const installed = inspection.found || installedNameVisible(payload.appName);
+    // Only a real plugins-grid card counts. Sidebar chats / search leftovers named
+    // coding-tools-mcp are not an installed MCP app.
+    const installed = Boolean(inspection.found && findGridArticle(payload.appName));
 
     if (installed) {
       // Every sync is a clean replacement, even when the endpoint is unchanged.
