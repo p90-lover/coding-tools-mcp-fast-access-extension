@@ -1,5 +1,5 @@
 (() => {
-  const HELPER_VERSION = '0.0.4';
+  const HELPER_VERSION = '0.0.5';
   if (globalThis.__codingToolsMcpExtensionV001Loaded) return;
   globalThis.__codingToolsMcpExtensionV001Loaded = true;
   const STRINGS = {
@@ -1317,9 +1317,8 @@
   function pluginsPageRenderState(appName) {
     if (findGridArticle(appName)) return 'app';
     if (pluginCardLinks().length) return 'cards';
-    // On the personal plugins URL, the search field means the list shell rendered.
-    // If no grid card matches this app, treat it as absent and allow create.
-    if (isPersonalPluginsUrl(location.href) && pluginSearchInput()) return 'cards';
+    // Search alone is NOT readiness: it paints before the grid. Creating on search-only
+    // skips delete when the existing card has not mounted yet.
 
     // Empty lists render no cards or search box in some ChatGPT builds. An explicit empty-state
     // message plus an exact create control is positive evidence that loading has completed.
@@ -1343,11 +1342,12 @@
    *   'unknown' — nothing trustworthy rendered; absence cannot be inferred
    */
   async function waitForPluginsPageReady(appName) {
+    // Give ChatGPT time to paint the grid. 1.5s was too short and created before delete.
     const listed = await waitFor(() => {
       if (!document.body || !normalize(document.body.textContent)) return null;
       const state = pluginsPageRenderState(appName);
       return state === 'unknown' ? null : state;
-    }, 1500, 150);
+    }, 12000, 250);
     return listed || pluginsPageRenderState(appName);
   }
 
@@ -1963,29 +1963,25 @@
     await ensurePersonalView();
     const readiness = await waitForPluginsPageReady(payload.appName);
 
-    // Fail closed. "No cards rendered" is not evidence the app is absent — it is evidence the list
-    // never loaded, and creating on that assumption is exactly how duplicates were produced. Retry
-    // in a fresh tab first; only accept an unrendered list as genuinely empty once retries are spent.
-    if (readiness === 'unknown' && (payload.attempt || 0) < 3 && !isPersonalPluginsUrl(location.href)) {
+    // Fail closed. Search shell / nav alone is not proof the app is absent. Wait and retry
+    // until real cards, this app, or an explicit empty state appear.
+    if (readiness === 'unknown') {
       activePrepareJobId = '';
       return {
         ok: false,
         stage: 'list_not_rendered',
-        message: `The plugins list did not render at ${location.href}, so whether ${payload.appName} already exists could not be determined. Nothing was created; retrying in a clean tab.`,
+        message: `The plugins list did not finish loading at ${location.href}, so whether ${payload.appName} already exists could not be determined. Nothing was created; waiting and retrying.`,
         inventory: pageInventory(),
       };
     }
 
-    // Already on personal plugins with no matching grid card: treat as deleted and create.
-    if (!findGridArticle(payload.appName) && isPersonalPluginsUrl(location.href) && (readiness === 'cards' || readiness === 'empty' || readiness === 'unknown' || pluginSearchInput())) {
-      // Fall through to create below. Do not invent an installed app from sidebar text.
-    }
-
     await clearPluginSearch();
+    // After clearing search, wait once more so filtered-away cards remount before we decide.
+    await waitForPluginsPageReady(payload.appName);
     const inspection = await inspectExistingApp(payload.appName);
     // Only a real plugins-grid card counts. Sidebar chats / search leftovers named
     // coding-tools-mcp are not an installed MCP app.
-    const installed = Boolean(inspection.found && findGridArticle(payload.appName));
+    const installed = Boolean(findGridArticle(payload.appName));
 
     if (installed) {
       // Every sync is a clean replacement, even when the endpoint is unchanged.
