@@ -1,0 +1,89 @@
+name: Verify Desktop rc3 extension compatibility
+on:
+  push:
+    branches: [fix/desktop-rc3-compat-0.0.7]
+    paths: [.github/workflows/desktop-compat.yml, 'aiTemp/compat/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-rc3-extension-source
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: aiTemp/source
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: aiTemp/source
+          fetch-depth: 0
+          clean: false
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+      - name: Reproduce released worker defects without using an account or model
+        run: |
+          set -euo pipefail
+          mkdir -p aiTemp/evidence aiTemp/baseline/aiTemp/compat
+          for file in background.js lib.mjs manifest.json; do git show "df23b6719c54acd759a44c5d6e3d3ad312702871:$file" > "aiTemp/baseline/$file"; done
+          cp aiTemp/compat/worker.test.mjs aiTemp/baseline/aiTemp/compat/worker.test.mjs
+          set +e
+          node --test aiTemp/baseline/aiTemp/compat/worker.test.mjs > aiTemp/evidence/worker-red.txt 2>&1
+          result=$?
+          set -e
+          test "$result" -ne 0
+          grep -F PARENT_TAB_IS_NOT_OAUTH_COMPLETION aiTemp/evidence/worker-red.txt
+          grep -F FORGED_MESSAGE_URL_MUST_NOT_RELEASE_PASSWORD aiTemp/evidence/worker-red.txt
+      - name: Materialize reviewed fixes and run selected compatibility checks
+        run: |
+          set -euo pipefail
+          python aiTemp/compat/apply.py
+          node --check background.js
+          node --check content.js
+          node --check oauth-content.js
+          node --test aiTemp/compat/worker.test.mjs aiTemp/compat/connection-dom.test.mjs 2>&1 | tee aiTemp/evidence/focused-green.txt
+          node tests/core.test.mjs 2>&1 | tee aiTemp/evidence/profile-smoke.txt
+          node tests/workflow.test.mjs 2>&1 | tee aiTemp/evidence/workflow-smoke.txt
+          grep -F '# pass 4' aiTemp/evidence/focused-green.txt
+          grep -F '# fail 0' aiTemp/evidence/focused-green.txt
+          git diff --cached --check
+          test -z "$(git diff --cached --diff-filter=D --name-only)"
+      - name: Record immutable tested source without changing main or publishing prematurely
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name 'p90-lover'
+          git config user.email '146848721+p90-lover@users.noreply.github.com'
+          if ! git diff --cached --quiet; then git commit -m 'fix: bind OAuth popup authorization and require exact app connection evidence'; fi
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          remote="$(git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)"
+          test "$remote" = "$GITHUB_SHA"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json,subprocess
+          source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          files=[p for p in Path('.').iterdir() if p.is_file() and p.suffix in {'.js','.mjs','.html','.css','.json'}]
+          proof={'source_commit':source,'version':json.loads(Path('manifest.json').read_text())['version'],'worker_dom_groups_passed':4,'model_requests':0,'codex_invoked':False,'live_account_verified':False,'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(files)}}
+          Path('aiTemp/evidence/source-proof.json').write_text(json.dumps(proof,indent=2)+'\n')
+          print(json.dumps(proof,indent=2))
+          PY
+          git bundle create aiTemp/evidence/extension-candidate.bundle HEAD
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: desktop-compat-extension-${{ github.run_id }}
+          path: aiTemp/source/aiTemp/evidence/
+          if-no-files-found: error
+          retention-days: 14
