@@ -1,5 +1,5 @@
 (() => {
-  const HELPER_VERSION = '0.0.5';
+  const HELPER_VERSION = '0.0.6';
   if (globalThis.__codingToolsMcpExtensionV001Loaded) return;
   globalThis.__codingToolsMcpExtensionV001Loaded = true;
   const STRINGS = {
@@ -1654,20 +1654,24 @@
     }
     scan.click();
 
-    let oauthLaunch = false;
-    if (normalize(authType) === 'oauth') {
-      const authSignals = ['authorize', 'authorization', 'sign in', 'log in', '授權', '授权', '登入', '登录'];
-      const authorize = await waitFor(() => findClickable(authSignals, activeSurface()), 6000, 250);
-      if (authorize && !authorize.disabled && authorize.getAttribute('aria-disabled') !== 'true') {
-        authorize.click();
-        oauthLaunch = true;
-      }
-    }
+    // Do NOT click Authorize here. ChatGPT mints the connector redirect_uri only after
+    // Create (or Connect). Clicking Authorize during Scan uses a callback that is not
+    // registered yet → "redirect_uri is not allowed".
+    // Wait briefly for Scan Tools to settle, then let the finalizer Create → Connect.
+    await sleep(1500);
+    await waitFor(() => {
+      const create = finalCreateButton(appName);
+      if (create) return create;
+      // Scan still running / tools list filling — keep waiting without clicking auth.
+      const surface = normalize(activeSurface().textContent || '');
+      if (/scan|tool|oauth|authoriz|驗證|扫描|掃描/.test(surface)) return null;
+      return null;
+    }, 20000, 400);
 
     return {
       ok: true,
-      stage: oauthLaunch ? 'oauth_launched' : 'scanning',
-      message: `Filled ${appName}, MCP URL and OAuth credentials, then started Scan Tools${oauthLaunch ? ' and opened OAuth authorization' : ''}.${warnings.length ? ` Review: ${warnings.join('; ')}.` : ''}`,
+      stage: 'scanning',
+      message: `Filled ${appName}, MCP URL and OAuth credentials, then started Scan Tools. Waiting for Create before any OAuth click.${warnings.length ? ` Review: ${warnings.join('; ')}.` : ''}`,
       warnings,
     };
   }
@@ -1871,23 +1875,18 @@
           return;
         }
 
-        const oauth = pendingOauthButton();
-        if (oauth && Date.now() - state.authClickedAt > 3500) {
-          state.authClickedAt = Date.now();
-          oauth.click();
-          return;
-        }
-
+        // Create before any OAuth click. Premature Authorize uses an unready redirect_uri.
         const create = finalCreateButton(appName);
         if (create) {
           create.click();
-          await sleep(1500);
+          await sleep(2000);
 
-          // In this ChatGPT build authorization happens AFTER creation: the new connector shows a
-          // Sign in control that starts the OAuth round trip. The job must stay alive through it,
-          // otherwise the service worker has no active job and refuses to hand the authorization
-          // password to the OAuth page helper.
+          // Wait for the new app card to appear so Connect targets the real connector.
+          await waitFor(() => findGridArticle(appName), 15000, 400);
+
           if (normalize(state.authType) === 'oauth' && findGridArticle(appName)) {
+            // Give ChatGPT a moment to attach the connector oauth callback id.
+            await sleep(2000);
             const connected = await openConnectFlow(appName);
             if (connected.opened) {
               await finish({
@@ -1907,8 +1906,13 @@
             return;
           }
 
-          await finish({ ok: true, stage: 'created', message: `${appName} was created after MCP scan/OAuth.` });
+          await finish({ ok: true, stage: 'created', message: `${appName} was created after MCP scan.` });
+          return;
         }
+
+        // Only if Create is not available yet, do not click Authorize during the draft/scan form.
+        // OAuth must start from post-create Connect / consent, not from a mid-scan Authorize button.
+
       } finally {
         state.busy = false;
       }
