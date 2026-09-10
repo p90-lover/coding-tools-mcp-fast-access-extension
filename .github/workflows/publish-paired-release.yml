@@ -1,0 +1,44 @@
+name: Publish verified Desktop-paired extension
+on:
+  push:
+    branches: [release/paired-desktop-0.0.7]
+    paths: [.github/workflows/publish-paired-release.yml]
+permissions:
+  contents: read
+concurrency:
+  group: publish-paired-extension-0.0.7
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    permissions:
+      contents: write
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    defaults:
+      run:
+        shell: bash
+        working-directory: aiTemp/checkout
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: aiTemp/checkout
+          clean: false
+          persist-credentials: false
+      - name: Require public Desktop evidence and byte-identical extension assets before updating main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python aiTemp/paired-release/publish.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: paired-extension-publication-${{ github.run_id }}
+          path: |
+            aiTemp/checkout/aiTemp/paired-release-receipt.json
+            aiTemp/checkout/aiTemp/paired-release-draft.json
+          if-no-files-found: warn
+          retention-days: 14
