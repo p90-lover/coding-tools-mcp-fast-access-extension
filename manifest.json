@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "coding-tools-mcp Extension",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "minimum_chrome_version": "120",
-  "description": "Fast, conservative Coding Tools MCP sync that deletes any existing same-name ChatGPT app before creating a clean OAuth replacement.",
+  "description": "Sync Coding Tools MCP with sender-bound OAuth popup authorization and app-specific connection verification.",
   "permissions": [
     "storage",
     "tabs",

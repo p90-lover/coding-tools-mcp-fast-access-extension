@@ -21,7 +21,7 @@
   }
 
   async function run() {
-    if (!/\/oauth\/authorize\/?$/i.test(location.pathname)) return;
+    if (location.protocol !== 'https:' || !/\/oauth\/authorize\/?$/i.test(location.pathname)) return;
 
     let auth = null;
     for (let attempt = 0; attempt < 20 && !auth?.ok; attempt += 1) {
@@ -37,21 +37,27 @@
     }
     if (!input) return;
 
-    setPassword(input, auth.password);
-    try {
-      await chrome.runtime.sendMessage({ type: 'OAUTH_SUBMITTED', url: location.href });
-    } catch {}
-
     const form = input.form || input.closest('form');
-    if (form) {
-      if (typeof form.requestSubmit === 'function') form.requestSubmit();
-      else form.submit();
-      return;
+    if (!form || form.method.toLowerCase() !== 'post' || typeof form.requestSubmit !== 'function') return;
+    const action = new URL(form.action || location.href, location.href);
+    if (action.origin !== location.origin || action.pathname.replace(/\/$/, '') !== '/oauth/authorize') return;
+    const expected = new URL(location.href).searchParams;
+    const fields = new FormData(form);
+    for (const name of ['client_id','redirect_uri','state','code_challenge','code_challenge_method']) {
+      if (expected.getAll(name).length !== 1 || fields.getAll(name).length !== 1 || fields.get(name) !== expected.get(name)) return;
     }
+    if (fields.getAll('consent_nonce').length !== 1 || !fields.get('consent_nonce')) return;
+    if (!form.checkValidity()) {
+      // An empty required password is expected before filling; other invalid fields fail later.
+      setPassword(input, auth.password);
+      if (!form.checkValidity()) return;
+    } else setPassword(input, auth.password);
+    try {
+      const acknowledged = await chrome.runtime.sendMessage({type:'OAUTH_SUBMITTED',url:location.href});
+      if (!acknowledged?.ok) return;
+      form.requestSubmit();
+    } catch { /* A disconnected worker must not submit an untracked authorization. */ }
 
-    const button = [...document.querySelectorAll('button,input[type="submit"]')]
-      .find((el) => /authorize|授權|授权/i.test((el.textContent || el.value || '').trim()));
-    if (button) button.click();
   }
 
   void run();

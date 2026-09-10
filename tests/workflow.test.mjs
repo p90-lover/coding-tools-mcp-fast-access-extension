@@ -11,7 +11,8 @@ const content = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
 const oauthContent = fs.readFileSync(path.join(root, 'oauth-content.js'), 'utf8');
 const pageBridge = fs.readFileSync(path.join(root, 'page-bridge.js'), 'utf8');
 
-assert.equal(manifest.version, '0.0.1');
+assert.ok(background.includes(`const HELPER_VERSION = '${manifest.version}';`));
+assert.ok(content.includes(`const HELPER_VERSION = '${manifest.version}';`));
 assert.ok(manifest.permissions.includes('alarms'));
 assert.ok(manifest.permissions.includes('offscreen'));
 assert.ok(manifest.host_permissions.includes('https://*.trycloudflare.com/*'));

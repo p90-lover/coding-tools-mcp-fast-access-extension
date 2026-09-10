@@ -10,7 +10,7 @@ import {
   oauthUrlsFromMcpUrl,
 } from './lib.mjs';
 
-const HELPER_VERSION = '0.0.6';
+const HELPER_VERSION = '0.0.7';
 const CHATGPT_HOME_URL = 'https://chatgpt.com/';
 const CHATGPT_PERSONAL_PLUGINS_URL = 'https://chatgpt.com/plugins?view=personal';
 const CHATGPT_PATTERNS = ['https://chatgpt.com/*', 'https://*.chatgpt.com/*', 'https://chat.openai.com/*'];
@@ -620,7 +620,16 @@ async function nudgeChatGptFinalizer(job) {
   const tab = await chrome.tabs.get(job.chatGptTabId).catch(() => null);
   if (!tab?.id || tab.status !== 'complete') return;
   try {
-    await sendToChatGpt(tab.id, { type: 'SYNC_MCP_APP_RESUME', appName: job.appName, jobId: job.id, authType: job.authType });
+    const result = await sendToChatGpt(tab.id, {
+      type: 'SYNC_MCP_APP_RESUME', appName: job.appName, jobId: job.id,
+      authType: job.authType, endpoint: job.endpoint,
+      oauthSubmitted: ['oauth_submitted', 'oauth_returned'].includes(job.phase),
+    });
+    if (result?.connectionObserved === true) {
+      await handleChatGptResult({ ...result, jobId: job.id }, {
+        id: chrome.runtime.id, frameId: 0, url: tab.url, tab: { id: tab.id },
+      });
+    }
   } catch {
     // The watchdog/tab update will retry. No long-lived polling in the worker.
   }
@@ -654,15 +663,9 @@ async function resumeActiveJob(trigger = 'event') {
       await driveCreateReplacement(job);
       return;
     }
-    // The OAuth form was submitted on the MCP host. Once the browser is back on chatgpt.com the
-    // round trip is over and the connector is authorized.
-    if (job.phase === 'oauth_submitted') {
-      const tab = job.chatGptTabId ? await chrome.tabs.get(job.chatGptTabId).catch(() => null) : null;
-      if (tab?.url && tab.status === 'complete' && /^https:\/\/([^/]+\.)?chatgpt\.com\//i.test(tab.url)) {
-        await updateSyncState('done', `${APP_NAME} was created and authorized with the current MCP URL.`, { jobId: job.id, trigger });
-        await clearActiveJob();
-        return;
-      }
+    // A chrome-less OAuth popup leaves the original ChatGPT tab unchanged.
+    // Submission/callback are progress only; wait for app-scoped connection evidence.
+    if (['oauth_submitted', 'oauth_returned'].includes(job.phase)) {
       await nudgeChatGptFinalizer(job);
       return;
     }
@@ -688,44 +691,113 @@ function oauthPageMatchesJob(job, pageUrl) {
   }
 }
 
-async function handleOauthReady(pageUrl) {
+function isChatGptOrigin(value) {
+  try { return ['https://chatgpt.com', 'https://chat.openai.com', 'https://www.chatgpt.com'].includes(new URL(value).origin); }
+  catch { return false; }
+}
+
+function validChatGptCallback(value) {
+  try {
+    const url = new URL(value);
+    if (url.origin !== 'https://chatgpt.com' || url.username || url.password || url.search || url.hash || value.length > 2048) return false;
+    return ['/connector_platform_oauth_redirect', '/connector_platform/oauth/callback', '/aip/oauth/callback'].includes(url.pathname)
+      || /^\/(?:oauth\/callback\/)?connector\/oauth\/[A-Za-z0-9_-]+$/.test(url.pathname);
+  } catch { return false; }
+}
+
+async function oauthSenderContext(job, pageUrl, sender) {
+  if (sender?.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isInteger(sender.tab?.id)) return null;
+  if (!oauthPageMatchesJob(job, pageUrl)) return null;
+  try {
+    const url = new URL(pageUrl);
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash || new URL(sender.url).href !== url.href) return null;
+    const tab = await chrome.tabs.get(sender.tab.id);
+    if (new URL(tab.url).href !== url.href) return null;
+    // Browser-provided opener metadata, not a URL claimed by a content script.
+    // Unlinked/noopener windows remain available for manual password entry.
+    if (tab.id !== job.chatGptTabId && tab.openerTabId !== job.chatGptTabId) return null;
+    if (job.oauthTabId != null && tab.id !== job.oauthTabId) return null;
+    const q = url.searchParams;
+    for (const name of ['response_type', 'client_id', 'redirect_uri', 'state', 'code_challenge', 'code_challenge_method']) {
+      if (q.getAll(name).length !== 1) return null;
+    }
+    if (q.get('response_type') !== 'code' || q.get('client_id') !== job.oauthClientId
+        || q.get('code_challenge_method') !== 'S256' || !/^[A-Za-z0-9_-]{43}$/.test(q.get('code_challenge'))
+        || !q.get('state') || q.get('state').length > 2048 || !validChatGptCallback(q.get('redirect_uri'))) return null;
+    if (job.oauthRequest && job.oauthRequest.url !== url.href) return null;
+    return { tabId: tab.id, request: {url:url.href, state:q.get('state'), redirectUri:q.get('redirect_uri')} };
+  } catch { return null; }
+}
+
+async function handleOauthReady(pageUrl, sender) {
   const job = await getActiveJob();
   if (!job || job.authType !== 'oauth') return { ok: false, reason: 'no_active_oauth_job' };
   if (!job.autoAuthorize) return { ok: false, reason: 'auto_authorize_off' };
-  if (!oauthPageMatchesJob(job, pageUrl)) return { ok: false, reason: 'oauth_url_mismatch' };
+  const context = await oauthSenderContext(job, pageUrl, sender);
+  if (!context) return { ok: false, reason: 'oauth_sender_or_request_mismatch' };
   if (!job.oauthPassword) return { ok: false, reason: 'oauth_password_missing' };
-  await updateSyncState('oauth_authorizing', 'Coding Tools MCP OAuth page detected; submitting the captured authorization password…', { jobId: job.id });
+  job.oauthTabId = context.tabId;
+  job.oauthRequest = context.request; // Transient session state, never logged or published.
+  job.updatedAt = Date.now();
+  await setActiveJob(job);
+  await updateSyncState('oauth_authorizing', 'Verified the OAuth popup and request; filling the authorization password.', { jobId: job.id });
   return { ok: true, password: job.oauthPassword };
 }
 
-async function handleOauthSubmitted(pageUrl) {
+async function handleOauthSubmitted(pageUrl, sender) {
   const job = await getActiveJob();
-  if (!job || !oauthPageMatchesJob(job, pageUrl)) return;
+  if (!job?.oauthRequest || !job.autoAuthorize || !(await oauthSenderContext(job, pageUrl, sender))) return {ok:false};
   job.phase = 'oauth_submitted';
   job.updatedAt = Date.now();
   await setActiveJob(job);
-  await updateSyncState('oauth_submitted', 'OAuth approval submitted. Waiting for ChatGPT Scan Tools / Create to finish…', { jobId: job.id });
-  void resumeActiveJob('oauth_submitted');
+  await updateSyncState('oauth_submitted', 'OAuth approval submitted. Waiting for the popup callback and ChatGPT connection status.', { jobId: job.id });
+  return {ok:true};
 }
 
-async function handleChatGptResult(result) {
+async function observeOAuthNavigation(tabId, pageUrl) {
   const job = await getActiveJob();
-  if (!job) return;
-  if (result?.jobId && result.jobId !== job.id) return;
-  const ok = result?.ok === true;
-
-  // Creation is not the end of an OAuth sync: ChatGPT only offers Sign in once the connector
-  // exists. Clearing the job here left handleOauthReady with no active job, so the OAuth page
-  // helper was never injected and the captured authorization password was never submitted.
-  if (ok && result?.awaitingOauth) {
-    job.phase = 'waiting_oauth_or_create';
+  if (!job?.oauthRequest || job.oauthTabId !== tabId || job.phase !== 'oauth_submitted') return;
+  try {
+    const url = new URL(pageUrl), expected = new URL(job.oauthRequest.redirectUri);
+    if (url.origin !== expected.origin || url.pathname !== expected.pathname || url.hash
+        || url.searchParams.getAll('state').length !== 1 || url.searchParams.get('state') !== job.oauthRequest.state) return;
+    if (url.searchParams.has('error')) {
+      job.phase = 'review';
+      await updateSyncState('oauth_error', 'The OAuth callback reported an error. Authorization has not been confirmed.', {jobId:job.id});
+    } else if (url.searchParams.getAll('code').length === 1 && url.searchParams.get('code')) {
+      job.phase = 'oauth_returned';
+      await updateSyncState('oauth_returned', 'The correct popup returned to ChatGPT. Waiting for app-specific connection evidence; tool execution is not yet verified.', {jobId:job.id});
+    } else return;
     job.updatedAt = Date.now();
+    await setActiveJob(job); // Do not retain the authorization code or callback URL.
+  } catch { /* A non-URL navigation is not completion evidence. */ }
+}
+
+async function handleChatGptResult(result, sender) {
+  const job = await getActiveJob();
+  if (!job || result?.jobId !== job.id || sender?.id !== chrome.runtime.id || sender.frameId !== 0
+      || sender.tab?.id !== job.chatGptTabId || !isChatGptOrigin(sender.url)) return;
+  const ok = result?.ok === true;
+  if (job.authType === 'oauth' && ok) {
+    const connected = ['oauth_submitted','oauth_returned'].includes(job.phase)
+      && result.stage === 'connected' && result.connectionObserved === true;
+    if (!connected) {
+      if (!['oauth_submitted','oauth_returned'].includes(job.phase)) job.phase = 'waiting_oauth_or_create';
+      job.updatedAt = Date.now();
+      await setActiveJob(job);
+      await updateSyncState('waiting_oauth', 'The app exists, but a completed OAuth connection has not been observed.', {jobId:job.id});
+      return;
+    }
+  }
+  if (!ok) {
+    job.phase = 'review'; job.updatedAt = Date.now();
     await setActiveJob(job);
-    await updateSyncState(result.stage || 'authorizing', result?.message || `${APP_NAME} was created; waiting for OAuth authorization.`, { jobId: job.id });
+    await updateSyncState(result?.stage || 'review', result?.message || 'ChatGPT needs manual review.', {jobId:job.id});
     return;
   }
-
-  await updateSyncState(ok ? 'done' : (result?.stage || 'review'), result?.message || (ok ? `${APP_NAME} sync completed.` : 'ChatGPT needs manual review.'), { jobId: job.id });
+  await updateSyncState('done', job.authType === 'oauth'
+    ? 'ChatGPT shows this exact app as connected. Actual MCP tool execution is not verified by the extension.'
+    : (result.message || `${APP_NAME} sync completed.`), {jobId:job.id});
   await clearActiveJob();
 }
 
@@ -757,6 +829,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url) void observeOAuthNavigation(tabId, changeInfo.url);
   if (changeInfo.status !== 'complete' || !tab.url) return;
   if (/^https:\/\/([^/]+\.)?chatgpt\.com\//i.test(tab.url) || /^https:\/\/chat\.openai\.com\//i.test(tab.url)) {
     void resumeActiveJob('chatgpt_tab_updated');
@@ -765,8 +838,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   void maybeInjectOauthHelper(tabId, tab.url);
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    const pageMessages = new Set(['OAUTH_PAGE_READY', 'OAUTH_SUBMITTED', 'CHATGPT_SYNC_RESULT']);
+    const ownUi = sender?.id === chrome.runtime.id && !sender.tab
+      && [chrome.runtime.getURL('popup.html'), chrome.runtime.getURL('offscreen.html')].includes(sender.url);
+    if (!pageMessages.has(message?.type) && !ownUi) {
+      sendResponse({ok:false, error:'This action is restricted to the extension interface.'});
+      return;
+    }
     if (message?.type === 'OFFSCREEN_HEARTBEAT') {
       const job = await getActiveJob();
       sendResponse({ ok: true, active: Boolean(job) });
@@ -836,18 +916,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message?.type === 'OAUTH_PAGE_READY') {
-      sendResponse(await handleOauthReady(message.url || ''));
+      sendResponse(await handleOauthReady(message.url || '', sender));
       return;
     }
 
     if (message?.type === 'OAUTH_SUBMITTED') {
-      await handleOauthSubmitted(message.url || '');
-      sendResponse({ ok: true });
+      sendResponse(await handleOauthSubmitted(message.url || '', sender));
       return;
     }
 
     if (message?.type === 'CHATGPT_SYNC_RESULT') {
-      await handleChatGptResult(message.result || {});
+      await handleChatGptResult(message.result || {}, sender);
       sendResponse({ ok: true });
       return;
     }

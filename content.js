@@ -1,5 +1,5 @@
 (() => {
-  const HELPER_VERSION = '0.0.6';
+  const HELPER_VERSION = '0.0.7';
   if (globalThis.__codingToolsMcpExtensionV001Loaded) return;
   globalThis.__codingToolsMcpExtensionV001Loaded = true;
   const STRINGS = {
@@ -2172,8 +2172,29 @@
     return { ok: true, stage: 'created', message: `${appName} was submitted after MCP/OAuth sync.` };
   }
 
+  function observeAppConnection(appName) {
+    const card = findGridArticle(appName);
+    const scopes = card ? [card] : [];
+    for (const dialog of visibleDialogs()) {
+      const headings = [...dialog.querySelectorAll('h1,h2,h3,[role="heading"]')];
+      if (headings.some((el) => sameAppIdentity(el.textContent, appName))) scopes.push(dialog);
+    }
+    for (const scope of scopes) {
+      const controls = allClickable(scope).filter(visible);
+      const pending = controls.some((el) => elementLabels(el).some((label) => /^(connect|sign in|log in|connection connect|連接|登入)$/.test(label)));
+      if (pending) continue;
+      const statuses = [...scope.querySelectorAll('[role="status"],[data-state="connected"],button,[role="button"]')].filter(visible);
+      const positive = statuses.some((el) => elementLabels(el).some((label) => /^(connected|connection connected|disconnect|connection disconnect|已連線|已連接|已连接|中斷連線|斷開連接)$/.test(label)));
+      if (positive) return {ok:true,stage:'connected',connectionObserved:true,
+        message:`ChatGPT shows ${appName} as connected; actual tool execution is not verified.`};
+    }
+    return {ok:false,stage:'connection_verification_pending',connectionObserved:false,
+      message:'Waiting for a Connected status on this exact app. No new authorization was started.'};
+  }
+
   // Test seam. This lives in the extension's isolated world, so the page cannot reach it.
   globalThis.__codingToolsMcpInternals = {
+    observeAppConnection,
     elementText,
     textMatches,
     findClickable,
@@ -2230,6 +2251,11 @@
 
     if (message?.type === 'SYNC_MCP_APP_RESUME') {
       const appName = message.appName || 'coding-tools-mcp';
+      if (message.oauthSubmitted) {
+        stopFinalizer();
+        sendResponse(observeAppConnection(appName));
+        return false;
+      }
       if (!isPersonalPluginsUrl(location.href)) {
         sendResponse({ ok: true, stage: 'wrong_page' });
         return false;

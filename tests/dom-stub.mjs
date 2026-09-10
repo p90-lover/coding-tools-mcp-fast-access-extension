@@ -30,9 +30,9 @@ class TextNode {
 
 function parseSelectorPart(part) {
   const trimmed = part.trim();
-  const match = trimmed.match(/^([a-zA-Z][\w-]*)?(?:\[([\w-]+)(?:=(?:"([^"]*)"|'([^']*)'))?\])?$/);
+  const match = trimmed.match(/^([a-zA-Z][\w-]*)?(?:\[([\w-]+)(?:([*^]?=)(?:"([^"]*)"|'([^']*)'))?\])?$/);
   if (!match) throw new Error(`dom-stub: unsupported selector "${trimmed}"`);
-  return { tag: match[1] || '', attr: match[2] || '', value: match[3] ?? match[4] ?? null };
+  return { tag: match[1] || '', attr: match[2] || '', operator: match[3] || '', value: match[4] ?? match[5] ?? null };
 }
 
 function parseSelector(selector) {
@@ -141,7 +141,10 @@ class StubElement {
     if (part.attr === 'href' && !this.attributes.has('href')) return false;
     if (!this.attributes.has(part.attr)) return false;
     if (part.value === null) return true;
-    return this.attributes.get(part.attr) === part.value;
+    const value = this.attributes.get(part.attr);
+    if (part.operator === '^=') return value.startsWith(part.value);
+    if (part.operator === '*=') return value.includes(part.value);
+    return value === part.value;
   }
 
   matches(selector) {
