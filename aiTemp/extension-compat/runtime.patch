@@ -1,0 +1,474 @@
+diff --git a/background.js b/background.js
+index 39fdbc6..225543d 100644
+--- a/background.js
++++ b/background.js
+@@ -8,9 +8,11 @@ import {
+   selectWorkspaceSnapshot,
+   isRemoteHttpsMcpUrl,
+   oauthUrlsFromMcpUrl,
++  validatedOAuthEndpoints,
++  isChatGptOAuthRedirect,
+ } from './lib.mjs';
+ 
+-const HELPER_VERSION = '0.0.6';
++const HELPER_VERSION = '0.0.7';
+ const CHATGPT_HOME_URL = 'https://chatgpt.com/';
+ const CHATGPT_PERSONAL_PLUGINS_URL = 'https://chatgpt.com/plugins?view=personal';
+ const CHATGPT_PATTERNS = ['https://chatgpt.com/*', 'https://*.chatgpt.com/*', 'https://chat.openai.com/*'];
+@@ -195,39 +197,17 @@ function originPatternFor(urlString) {
+ }
+ 
+ async function resolveOAuthEndpoints(selected) {
+-  const fallback = { ...oauthUrlsFromMcpUrl(selected.publicUrl), metadataStale: false };
++  const fallback = validatedOAuthEndpoints(selected.publicUrl);
+   const pattern = originPatternFor(fallback.metadataUrl);
+   if (!pattern || !(await permissionContains(pattern))) return fallback;
+-
+   try {
+     const response = await fetch(fallback.metadataUrl, {
+-      cache: 'no-store',
+-      headers: { accept: 'application/json' },
++      cache: 'no-store', credentials: 'omit', redirect: 'error',
++      signal: AbortSignal.timeout(8000), headers: {accept: 'application/json'},
+     });
+     if (!response.ok) return fallback;
+-    const metadata = await response.json();
+-    const advertised = String(metadata.authorization_endpoint || '');
+-
+-    // Coding Tools MCP caches the tunnel hostname at first start, so after the Quick Tunnel
+-    // rotates the live server still advertises the previous host. Anything ChatGPT discovers from
+-    // it then points at a dead tunnel, so the locally derived URLs must win.
+-    let metadataStale = false;
+-    try {
+-      metadataStale = Boolean(advertised)
+-        && new URL(advertised).origin.toLowerCase() !== new URL(fallback.baseUrl).origin.toLowerCase();
+-    } catch {
+-      metadataStale = false;
+-    }
+-    if (metadataStale) return { ...fallback, metadataStale: true };
+-
+-    return {
+-      ...fallback,
+-      authorizationUrl: advertised || fallback.authorizationUrl,
+-      tokenUrl: String(metadata.token_endpoint || fallback.tokenUrl),
+-    };
+-  } catch {
+-    return fallback;
+-  }
++    return validatedOAuthEndpoints(selected.publicUrl, await response.json());
++  } catch { return fallback; }
+ }
+ 
+ async function getActiveJob() {
+@@ -654,16 +634,20 @@ async function resumeActiveJob(trigger = 'event') {
+       await driveCreateReplacement(job);
+       return;
+     }
+-    // The OAuth form was submitted on the MCP host. Once the browser is back on chatgpt.com the
+-    // round trip is over and the connector is authorized.
++    // The opener stays on ChatGPT while OAuth runs in a separate popup. Its URL
++    // is not evidence of callback success, token exchange, or a connected app.
+     if (job.phase === 'oauth_submitted') {
+       const tab = job.chatGptTabId ? await chrome.tabs.get(job.chatGptTabId).catch(() => null) : null;
+-      if (tab?.url && tab.status === 'complete' && /^https:\/\/([^/]+\.)?chatgpt\.com\//i.test(tab.url)) {
+-        await updateSyncState('done', `${APP_NAME} was created and authorized with the current MCP URL.`, { jobId: job.id, trigger });
+-        await clearActiveJob();
+-        return;
++      if (tab?.status === 'complete' && isTrustedChatGptPage(tab.url)) {
++        const result = await sendToChatGpt(tab.id, {type: 'SYNC_MCP_APP_VERIFY_CONNECTION',
++          appName: job.appName, jobId: job.id, endpoint: job.endpoint});
++        if (verifiedConnectionResult(result, job)) {
++          await updateSyncState('done', `${APP_NAME} shows Connected for the selected MCP endpoint.`, {jobId: job.id, trigger});
++          await clearActiveJob();
++        } else {
++          await updateSyncState('verification_pending', 'OAuth form submitted; waiting for this app to show Connected. The authorization job is retained until verification or its timeout.', {jobId: job.id, trigger});
++        }
+       }
+-      await nudgeChatGptFinalizer(job);
+       return;
+     }
+ 
+@@ -677,15 +661,38 @@ async function resumeActiveJob(trigger = 'event') {
+   }
+ }
+ 
++function isTrustedChatGptPage(value) {
++  try {
++    const u = new URL(value);
++    return !u.username && !u.password && ['https://chatgpt.com', 'https://www.chatgpt.com', 'https://chat.openai.com'].includes(u.origin);
++  } catch { return false; }
++}
++
++function verifiedConnectionResult(result, job) {
++  return result?.ok === true && result.connectionVerified === true
++    && result.jobId === job.id && result.appName === job.appName
++    && result.endpoint === job.endpoint && result.evidence === 'scoped_dom_connection';
++}
++
+ function oauthPageMatchesJob(job, pageUrl) {
+   if (!job?.oauthAuthorizeUrl || !pageUrl) return false;
+   try {
+     const expected = new URL(job.oauthAuthorizeUrl);
+     const current = new URL(pageUrl);
+-    return expected.origin === current.origin && expected.pathname.replace(/\/$/, '') === current.pathname.replace(/\/$/, '');
+-  } catch {
+-    return false;
+-  }
++    const q = current.searchParams;
++    const unique = ['response_type', 'client_id', 'redirect_uri', 'state', 'code_challenge', 'code_challenge_method'];
++    return current.protocol === 'https:' && !current.username && !current.password && !current.hash
++      && expected.origin === current.origin && expected.pathname === current.pathname
++      && unique.every((key) => q.getAll(key).length === 1)
++      && q.get('response_type') === 'code' && q.get('client_id') === job.oauthClientId
++      && isChatGptOAuthRedirect(q.get('redirect_uri')) && Boolean(q.get('state'))
++      && q.get('code_challenge_method') === 'S256' && /^[A-Za-z0-9_-]{43}$/.test(q.get('code_challenge') || '');
++  } catch { return false; }
++}
++
++function senderDocument(sender) {
++  if (sender?.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isInteger(sender.tab?.id)) return '';
++  return sender.url || sender.tab.url || '';
+ }
+ 
+ async function handleOauthReady(pageUrl) {
+@@ -708,23 +715,31 @@ async function handleOauthSubmitted(pageUrl) {
+   void resumeActiveJob('oauth_submitted');
+ }
+ 
+-async function handleChatGptResult(result) {
++async function handleChatGptResult(result, sender) {
+   const job = await getActiveJob();
+   if (!job) return;
+-  if (result?.jobId && result.jobId !== job.id) return;
++  if (result?.jobId !== job.id || sender?.tab?.id !== job.chatGptTabId || !isTrustedChatGptPage(senderDocument(sender))) return;
+   const ok = result?.ok === true;
+ 
+   // Creation is not the end of an OAuth sync: ChatGPT only offers Sign in once the connector
+   // exists. Clearing the job here left handleOauthReady with no active job, so the OAuth page
+   // helper was never injected and the captured authorization password was never submitted.
+   if (ok && result?.awaitingOauth) {
+-    job.phase = 'waiting_oauth_or_create';
++    // An earlier create response can arrive after the popup has submitted.
++    job.phase = job.phase === 'oauth_submitted' ? 'oauth_submitted' : 'waiting_oauth_or_create';
+     job.updatedAt = Date.now();
+     await setActiveJob(job);
+     await updateSyncState(result.stage || 'authorizing', result?.message || `${APP_NAME} was created; waiting for OAuth authorization.`, { jobId: job.id });
+     return;
+   }
+ 
++  if (ok && job.authType === 'oauth' && !verifiedConnectionResult(result, job)) {
++    job.phase = job.phase === 'oauth_submitted' ? 'oauth_submitted' : 'waiting_oauth_or_create';
++    job.updatedAt = Date.now();
++    await setActiveJob(job);
++    await updateSyncState('verification_pending', 'Creation alone does not prove OAuth connected; waiting for scoped connection evidence.', {jobId: job.id});
++    return;
++  }
+   await updateSyncState(ok ? 'done' : (result?.stage || 'review'), result?.message || (ok ? `${APP_NAME} sync completed.` : 'ChatGPT needs manual review.'), { jobId: job.id });
+   await clearActiveJob();
+ }
+@@ -745,7 +760,7 @@ async function maybeInjectOauthHelper(tabId, url) {
+ }
+ 
+ chrome.runtime.onInstalled.addListener(() => {
+-  void updateSyncState('ready', `v${HELPER_VERSION} loaded. Sync starts at ChatGPT personal plugins, tolerates the empty-list redirect to /plugins, and compares the existing MCP URL before replacing anything.`);
++  void updateSyncState('ready', `v${HELPER_VERSION} loaded. Sync starts at ChatGPT personal plugins, tolerates the empty-list redirect to /plugins, and replaces the exact-name app only when you start Sync.`);
+ });
+ 
+ chrome.runtime.onStartup.addListener(() => {
+@@ -765,7 +780,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+   void maybeInjectOauthHelper(tabId, tab.url);
+ });
+ 
+-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
++chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+   (async () => {
+     if (message?.type === 'OFFSCREEN_HEARTBEAT') {
+       const job = await getActiveJob();
+@@ -836,18 +851,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+     }
+ 
+     if (message?.type === 'OAUTH_PAGE_READY') {
+-      sendResponse(await handleOauthReady(message.url || ''));
++      sendResponse(await handleOauthReady(senderDocument(sender)));
+       return;
+     }
+ 
+     if (message?.type === 'OAUTH_SUBMITTED') {
+-      await handleOauthSubmitted(message.url || '');
++      await handleOauthSubmitted(senderDocument(sender));
+       sendResponse({ ok: true });
+       return;
+     }
+ 
+     if (message?.type === 'CHATGPT_SYNC_RESULT') {
+-      await handleChatGptResult(message.result || {});
++      await handleChatGptResult(message.result || {}, sender);
+       sendResponse({ ok: true });
+       return;
+     }
+diff --git a/content.js b/content.js
+index 94f8042..8b72352 100644
+--- a/content.js
++++ b/content.js
+@@ -1,5 +1,5 @@
+ (() => {
+-  const HELPER_VERSION = '0.0.6';
++  const HELPER_VERSION = '0.0.7';
+   if (globalThis.__codingToolsMcpExtensionV001Loaded) return;
+   globalThis.__codingToolsMcpExtensionV001Loaded = true;
+   const STRINGS = {
+@@ -447,7 +447,8 @@
+       push(el.getAttribute('data-mcp-url'));
+     }
+ 
+-    const text = String(root.textContent || '');
++    // Rendered block boundaries keep a URL separate from the next status label.
++    const text = String(root.innerText || root.textContent || '');
+     for (const match of text.matchAll(/https:\/\/[^\s"'<>]+/gi)) push(match[0]);
+     return values;
+   }
+@@ -1834,6 +1835,54 @@
+     return { opened: true, via: 'manage+consent' };
+   }
+ 
++  // Read only a scoped connection row plus the exact configured endpoint.
++  // Card existence, a closed popup and a generic ChatGPT URL are not success.
++  function connectionEvidence(appName, endpoint, ownedDialog = null) {
++    const expected = canonicalMcpEndpoint(endpoint);
++    const pending = {ok: true, connectionVerified: false, appName, endpoint, stage: 'authorization_pending'};
++    if (!expected || !isPersonalPluginsPage()) return pending;
++    const cards = pluginGridArticles().filter((card) => exactNameIn(card, appName) && !otherAppTitleIn(card, appName));
++    if (cards.length > 1) return {...pending, stage: 'ambiguous_app'};
++    const card = cards[0] || findGridArticle(appName);
++    const scopes = [...(card ? [card] : []), ...visibleDialogs().filter((dialog) => exactNameIn(dialog, appName) || dialog === ownedDialog)];
++    for (const scope of scopes) {
++      const endpoints = collectMcpEndpoints(scope);
++      if (endpoints.length !== 1 || endpoints[0] !== expected) continue;
++      const rows = [...scope.querySelectorAll('button, [role="button"], [role="status"], div, dd')].filter(visible);
++      const connected = rows.some((row) => /^(?:connection\s*connected|連線\s*已連線|連接\s*已連接|连接\s*已连接)$/.test(normalize(row.innerText || row.textContent)));
++      if (connected) return {...pending, connectionVerified: true, stage: 'connected', evidence: 'scoped_dom_connection'};
++    }
++    return pending;
++  }
++
++  let connectionVerificationBusy = false;
++  async function verifyConnection(payload) {
++    let result = connectionEvidence(payload.appName, payload.endpoint);
++    if (result.connectionVerified || connectionVerificationBusy || !isPersonalPluginsPage()) return {...result, jobId: payload.jobId};
++    connectionVerificationBusy = true;
++    try {
++      // This recovery path may open only the exact app's Manage panel. It never
++      // starts another OAuth popup, deletes the app, or clicks a consent action.
++      const card = findGridArticle(payload.appName);
++      if (!card) return {...result, jobId: payload.jobId};
++      const existing = visibleDialogs().find((dialog) => exactNameIn(dialog, payload.appName));
++      if (existing) return {...result, jobId: payload.jobId};
++      const actions = pluginActionsButtonIn(card) || menuButtonForAppCard(card);
++      if (!actions) return {...result, jobId: payload.jobId};
++      await pointerActivateMenu(actions);
++      const manage = await waitFor(() => {
++        const menu = [...document.querySelectorAll('[role="menu"]')].filter(visible).at(-1);
++        return menu ? allClickable(menu).find((el) => textMatches(el, STRINGS.manage, true)) : null;
++      }, 2500, 150);
++      if (!manage) return {...result, jobId: payload.jobId};
++      const previousDialogs = new Set(visibleDialogs());
++      await pointerActivateMenu(manage);
++      const dialog = await waitFor(() => visibleDialogs().find((item) => !previousDialogs.has(item)), 3000, 150);
++      result = connectionEvidence(payload.appName, payload.endpoint, dialog);
++      return {...result, jobId: payload.jobId};
++    } finally { connectionVerificationBusy = false; }
++  }
++
+   function pendingOauthButton() {
+     const surface = activeSurface();
+     const authSignals = ['authorize', 'authorization', 'connect', 'sign in', 'log in', '授權', '授权', '連線', '连接', '登入', '登录'];
+@@ -2197,6 +2246,7 @@
+     precedingLabelText,
+     signInControl,
+     connectControlIn,
++    connectionEvidence,
+     openConnectFlow,
+     consentSignInControl,
+     menuButtonForAppCard,
+@@ -2228,6 +2278,14 @@
+       return true;
+     }
+ 
++    if (message?.type === 'SYNC_MCP_APP_VERIFY_CONNECTION') {
++      stopFinalizer();
++      verifyConnection(message)
++        .then(sendResponse)
++        .catch(() => sendResponse({ok: true, connectionVerified: false, jobId: message.jobId, stage: 'verification_pending'}));
++      return true;
++    }
++
+     if (message?.type === 'SYNC_MCP_APP_RESUME') {
+       const appName = message.appName || 'coding-tools-mcp';
+       if (!isPersonalPluginsUrl(location.href)) {
+diff --git a/lib.mjs b/lib.mjs
+index 0dc1d8d..80cf2fc 100644
+--- a/lib.mjs
++++ b/lib.mjs
+@@ -33,6 +33,7 @@ export function normalizePublicMcpUrl(rawUrl = '') {
+   } catch {
+     return '';
+   }
++  if (parsed.username || parsed.password || !['https:', 'http:'].includes(parsed.protocol)) return '';
+   parsed.hash = '';
+   parsed.search = '';
+   const trimmedPath = parsed.pathname.replace(/\/+$/, '');
+@@ -44,8 +45,8 @@ export function isRemoteHttpsMcpUrl(value) {
+   try {
+     const url = new URL(value);
+     const host = url.hostname.toLowerCase();
+-    if (url.protocol !== 'https:') return false;
+-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false;
++    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return false;
++    if (host === 'localhost' || host.endsWith('.localhost') || /^127\./.test(host) || host === '0.0.0.0' || host === '[::1]') return false;
+     return /\/mcp\/?$/i.test(url.pathname);
+   } catch {
+     return false;
+@@ -88,10 +89,23 @@ function oauthClientId(data, profile) {
+   return String(profile?.auth?.oauth_client_id || '');
+ }
+ 
++// Match WorkspaceProfile::effective_public_url_with, including selected FRP settings.
++function workspacePublicUrl(data, profile) {
++  const tunnel = profile?.tunnel || {};
++  if ((tunnel.type || tunnel.tunnel_type) === 'frp') {
++    const id = String(tunnel.frp_profile_id || '');
++    const configured = id ? (Array.isArray(data?.frp_profiles) ? data.frp_profiles : []).find((item) => item.id === id) : null;
++    const server = String(configured ? configured.server || '' : tunnel.frp_server || '');
++    const subdomain = String(tunnel.frp_subdomain || '');
++    if (server && subdomain) return normalizePublicMcpUrl(`https://${subdomain}.${server}`);
++  }
++  return normalizePublicMcpUrl(tunnel.public_url || '');
++}
++
+ export function listWorkspaceChoices(data) {
+   const profiles = Array.isArray(data?.profiles) ? data.profiles : [];
+   return profiles.map((profile) => {
+-    const publicUrl = normalizePublicMcpUrl(profile?.tunnel?.public_url || '');
++    const publicUrl = workspacePublicUrl(data, profile);
+     return {
+       id: String(profile?.id || ''),
+       name: String(profile?.name || profile?.id || 'Unnamed workspace'),
+@@ -123,10 +137,10 @@ export function selectWorkspaceSnapshot(data, preferredId = '') {
+   if (!workspaces.length) throw new Error('No Coding Tools MCP workspaces were found in profiles.json.');
+ 
+   const requestedId = String(preferredId || data?.last_workspace_id || '');
+-  let selected = workspaces.find((item) => item.id === requestedId);
+-  if (!selected || !selected.publicUrl) {
+-    selected = workspaces.find((item) => item.publicUrl) || selected || workspaces[0];
+-  }
++  const selected = requestedId ? workspaces.find((item) => item.id === requestedId) : workspaces[0];
++  if (!selected) throw new Error('Selected workspace was not found in profiles.json. Select it again explicitly.');
++  // A stopped/empty selected tunnel stays selected. createSyncJob explains the
++  // missing endpoint instead of silently authorizing a different workspace.
+ 
+   return {
+     selected: enrichWorkspace(data, selected),
+@@ -134,3 +148,31 @@ export function selectWorkspaceSnapshot(data, preferredId = '') {
+     lastWorkspaceId: String(data?.last_workspace_id || ''),
+   };
+ }
++
++// The desktop's authorization server is on the selected MCP origin. Discovered
++// endpoints must not send OAuth client secrets to another or rotated hostname.
++export function validatedOAuthEndpoints(mcpUrl, metadata = {}) {
++  const fallback = {...oauthUrlsFromMcpUrl(mcpUrl), metadataStale: false};
++  const pairs = [['authorization_endpoint', 'authorizationUrl'], ['token_endpoint', 'tokenUrl']];
++  for (const [key, target] of pairs) {
++    if (!metadata?.[key]) continue;
++    try {
++      const candidate = new URL(String(metadata[key]));
++      if (candidate.protocol !== 'https:' || candidate.username || candidate.password || candidate.search || candidate.hash || candidate.href !== fallback[target]) {
++        return {...fallback, metadataStale: true};
++      }
++    } catch { return {...fallback, metadataStale: true}; }
++  }
++  if (metadata?.issuer && String(metadata.issuer).replace(/\/$/, '') !== fallback.baseUrl) return {...fallback, metadataStale: true};
++  return fallback;
++}
++
++export function isChatGptOAuthRedirect(value) {
++  if (typeof value !== 'string' || value.length > 2048 || /[\s\\]/.test(value)) return false;
++  try {
++    const u = new URL(value);
++    if (u.origin !== 'https://chatgpt.com' || u.username || u.password || u.search || u.hash) return false;
++    return ['/connector_platform_oauth_redirect', '/connector_platform/oauth/callback', '/aip/oauth/callback'].includes(u.pathname)
++      || /^\/(?:connector\/oauth|oauth\/callback\/connector\/oauth)\/[A-Za-z0-9_-]+$/.test(u.pathname);
++  } catch { return false; }
++}
+diff --git a/manifest.json b/manifest.json
+index fc11a3f..00c2a8a 100644
+--- a/manifest.json
++++ b/manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "manifest_version": 3,
+   "name": "coding-tools-mcp Extension",
+-  "version": "0.0.6",
++  "version": "0.0.7",
+   "minimum_chrome_version": "120",
+   "description": "Fast, conservative Coding Tools MCP sync that deletes any existing same-name ChatGPT app before creating a clean OAuth replacement.",
+   "permissions": [
+diff --git a/oauth-content.js b/oauth-content.js
+index 18eaaab..bf4c279 100644
+--- a/oauth-content.js
++++ b/oauth-content.js
+@@ -36,6 +36,12 @@
+       if (!input) await sleep(100);
+     }
+     if (!input) return;
++    const ownedForm = input.form || input.closest('form');
++    if (!ownedForm || String(ownedForm.method || '').toLowerCase() !== 'post') return;
++    try {
++      const action = new URL(ownedForm.getAttribute('action') || location.href, location.href);
++      if (action.origin !== location.origin || action.pathname !== '/oauth/authorize') return;
++    } catch { return; }
+ 
+     setPassword(input, auth.password);
+     try {
+diff --git a/popup.html b/popup.html
+index 7588cc6..59edff3 100644
+--- a/popup.html
++++ b/popup.html
+@@ -87,7 +87,7 @@
+     </div>
+ 
+     <p id="diagnostics" class="mono">Checking permissions…</p>
+-    <p class="hint">Manifest V3 service workers may sleep. v0.0.1 resumes safely, validates the rendered ChatGPT manager page, deletes exact-name apps, and recreates one clean replacement.</p>
++    <p class="hint">Manifest V3 service workers may sleep. v0.0.7 resumes safely, validates the rendered ChatGPT manager page, deletes exact-name apps, and recreates one clean replacement.</p>
+     <p id="status" class="status">Waiting.</p>
+     <button id="openAppsBtn" class="linkBtn bottom">Open ChatGPT personal plugins</button>
+   </main>
+diff --git a/tests/dom-stub.mjs b/tests/dom-stub.mjs
+index 7e79bea..b482706 100644
+--- a/tests/dom-stub.mjs
++++ b/tests/dom-stub.mjs
+@@ -30,9 +30,9 @@ class TextNode {
+ 
+ function parseSelectorPart(part) {
+   const trimmed = part.trim();
+-  const match = trimmed.match(/^([a-zA-Z][\w-]*)?(?:\[([\w-]+)(?:=(?:"([^"]*)"|'([^']*)'))?\])?$/);
++  const match = trimmed.match(/^([a-zA-Z][\w-]*)?(?:\[([\w-]+)(?:([*^$]?=)(?:"([^"]*)"|'([^']*)'))?\])?$/);
+   if (!match) throw new Error(`dom-stub: unsupported selector "${trimmed}"`);
+-  return { tag: match[1] || '', attr: match[2] || '', value: match[3] ?? match[4] ?? null };
++  return { tag: match[1] || '', attr: match[2] || '', operator: match[3] || '', value: match[4] ?? match[5] ?? null };
+ }
+ 
+ function parseSelector(selector) {
+@@ -141,7 +141,11 @@ class StubElement {
+     if (part.attr === 'href' && !this.attributes.has('href')) return false;
+     if (!this.attributes.has(part.attr)) return false;
+     if (part.value === null) return true;
+-    return this.attributes.get(part.attr) === part.value;
++    const value = this.attributes.get(part.attr);
++    if (part.operator === '^=') return value.startsWith(part.value);
++    if (part.operator === '$=') return value.endsWith(part.value);
++    if (part.operator === '*=') return value.includes(part.value);
++    return value === part.value;
+   }
+ 
+   matches(selector) {
