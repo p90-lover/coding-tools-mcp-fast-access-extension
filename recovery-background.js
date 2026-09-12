@@ -2,6 +2,8 @@ import './recovery-policy.js';
 const P = globalThis.CTMChatRecovery;
 const CHANNEL = 'ctm-chatgpt-recovery-v1', KEY = 'ctmChatRecoveryV1', PREFS = 'ctmChatRecoveryOptionsV1';
 const ALARM = 'ctm-chatgpt-recovery-pulse';
+// A delayed browser task must not replay an old reservation after sleep/reload.
+const CLAIM_TTL_MS = 15 * 1000;
 let queue = Promise.resolve();
 const serial = (fn) => { const next = queue.then(fn); queue = next.catch(() => {}); return next; };
 const read = async () => (await chrome.storage.session.get(KEY))[KEY] || {};
@@ -47,6 +49,7 @@ chrome.runtime.onConnect.addListener((port) => {
   let pageOrigin = '';
   try { pageOrigin = new URL(sender?.url).origin; } catch {}
   const page = sender?.id === chrome.runtime.id && sender.tab && sender.frameId === 0
+    && typeof sender.documentId === 'string' && sender.documentId.length > 0
     && ['https://chatgpt.com', 'https://chat.openai.com'].includes(pageOrigin);
   if (!ui && !page) { port.disconnect(); return; }
   port.onMessage.addListener((message) => {
@@ -76,7 +79,7 @@ chrome.runtime.onConnect.addListener((port) => {
       }
       if (!page || !slot?.enabled || slot.tabId !== tabId || message.generation !== slot.generation) return view(slot, tabId);
       if (message.type === 'pause') {
-        slot.enabled = false; slot.token = ''; slot.state.status = 'Paused: manual Stop or unsafe page action';
+        slot.enabled = false; slot.token = ''; slot.sendToken = ''; slot.state.status = 'Paused: manual Stop or unsafe page action';
         await write(db); return view(slot, tabId);
       }
       if (message.type === 'observe') {
@@ -89,16 +92,34 @@ chrome.runtime.onConnect.addListener((port) => {
         if (sample.manualStop) slot.enabled = false;
         const plan = outcome.action ? { kind: outcome.action, key, fingerprint: sample.fingerprint,
           generation: slot.generation, token: crypto.randomUUID(), prompt: slot.options.prompt } : null;
-        if (plan) slot.token = plan.token;
+        if (plan) {
+          slot.token = plan.token; slot.tokenKind = plan.kind;
+          slot.tokenDocumentId = sender.documentId;
+          slot.tokenExpiresAt = Date.now() + CLAIM_TTL_MS;
+          slot.sendToken = '';
+        }
         await write(db); // Reserve BEFORE delivering; worker restart/duplicate tabs cannot replay.
         return { ...view(slot, tabId), plan };
       }
-      if (message.type === 'claim') {
+      if (message.type === 'claim' || message.type === 'commit_send') {
         const sample = snapshot(message.sample);
         const sync = (await chrome.storage.session.get('activeSyncJob')).activeSyncJob;
-        const allowed = !sync && !!slot.token && message.token === slot.token && sample.fingerprint === slot.state.fingerprint
-          && !sample.busy && !sample.draft && !sample.editing && !sample.blocked && !sample.manualStop;
-        slot.token = ''; await write(db);
+        const committing = message.type === 'commit_send';
+        const token = committing ? slot.sendToken : slot.token;
+        const owns = !!token && message.token === token && slot.tokenDocumentId === sender.documentId;
+        const allowed = !sync && owns && Date.now() < slot.tokenExpiresAt
+          && sample.fingerprint === slot.state.fingerprint
+          && !sample.busy && !sample.editing && !sample.blocked && !sample.manualStop
+          && (committing ? slot.tokenKind === 'send_continue' && slot.options.autoContinue
+            && message.draftHash === P.hash(slot.options.prompt) : !sample.draft);
+        if (owns) {
+          if (committing) slot.sendToken = '';
+          else {
+            slot.token = '';
+            slot.sendToken = allowed && slot.tokenKind === 'send_continue' ? token : '';
+          }
+          await write(db); // Consume each phase before returning its authorization.
+        }
         return { ...view(slot, tabId), allowed };
       }
       throw new Error('Unknown recovery request.');

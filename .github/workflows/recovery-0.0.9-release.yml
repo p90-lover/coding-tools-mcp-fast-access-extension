@@ -1,0 +1,91 @@
+name: Package verified ChatGPT recovery v0.0.9
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/recovery-0.0.9-release.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: extension-recovery-v0.0.9-release
+  cancel-in-progress: false
+jobs:
+  package:
+    if: github.repository == 'p90-lover/coding-tools-mcp-fast-access-extension' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: aiTemp/source
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: aiTemp/source
+          clean: false
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+      - name: Verify exact locally tested source and selected existing smoke test
+        run: |
+          set -euo pipefail
+          mkdir -p aiTemp/release
+          printf '%s\n' \
+            '9948528328d9313d777f86a073512992d2b26d183d3fe7414d689e4d0959190b  recovery-content.js' \
+            'c228dcb8b4bd91a9c1250cad18ee57ab3c0ef9aca69e0a14f16dccafa50b9e64  recovery-background.js' | sha256sum --check
+          for file in *.js *.mjs; do node --check "$file"; done
+          node tests/core.test.mjs
+      - name: Package only runtime files and user documentation
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json,re,subprocess,zipfile
+          root=Path('.'); out=root/'aiTemp/release'
+          manifest=json.loads((root/'manifest.json').read_text())
+          assert manifest['version']=='0.0.9'
+          names='background.js content.js lib.mjs manifest.json oauth-content.js offscreen-heartbeat-worker.js offscreen.html offscreen.js page-bridge.js popup.css popup.html popup.js recovery-background.js recovery-content.js recovery-policy.js recovery-popup.js recovery-worker.js CHATGPT_RECOVERY.md RELEASE_NOTES_v0.0.9.md'.split()
+          for name in names:
+              assert (root/name).is_file() and not (root/name).is_symlink(), name
+          refs=[manifest['background']['service_worker'],manifest['action']['default_popup']]
+          for script in manifest['content_scripts']: refs+=script['js']
+          for name in names:
+              if name.endswith(('.js','.mjs')):
+                  refs+=re.findall(r'''(?:from\s*|import\s*)['"]\./([^'"]+)['"]''',(root/name).read_text())
+              if name.endswith('.html'):
+                  refs+=re.findall(r'''(?:src|href)=["']([^"']+)["']''',(root/name).read_text())
+          assert all(ref in names for ref in refs), refs
+          archive=out/'coding-tools-mcp-extension-v0.0.9.zip'
+          with zipfile.ZipFile(archive,'x',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+              for name in names: z.write(root/name,arcname=name)
+          with zipfile.ZipFile(archive) as z:
+              assert z.testzip() is None
+              assert set(z.namelist())==set(names)
+              assert json.loads(z.read('manifest.json'))['version']=='0.0.9'
+          proof={'version':'0.0.9','source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+              'runtime_sha256':{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in names},
+              'local_validation':'Node worker/policy and Chromium 144 local DOM fixtures; synthetic boundaries',
+              'ci_validation':'tested-source hashes, JavaScript syntax, existing core smoke, archive references and CRC',
+              'live_chatgpt_verified':False,'installed_windows_verified':False,'codex_invoked':False,'new_test_files_published':False}
+          (out/'provenance.json').write_text(json.dumps(proof,indent=2)+'\n')
+          (out/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in [archive,out/'provenance.json']))
+          print(json.dumps({'archive':str(archive),'bytes':archive.stat().st_size,'files':len(names),'source_commit':proof['source_commit']}))
+          PY
+      - name: Create new prerelease without replacing any existing release or asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release create v0.0.9 \
+            aiTemp/release/coding-tools-mcp-extension-v0.0.9.zip \
+            aiTemp/release/provenance.json aiTemp/release/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --draft --prerelease \
+            --title 'coding-tools-mcp Extension v0.0.9 — ChatGPT recovery fixes' \
+            --notes-file RELEASE_NOTES_v0.0.9.md
+          gh release edit v0.0.9 --draft=false --prerelease
+          gh release view v0.0.9 --json url,tagName,targetCommitish,isDraft,isPrerelease,assets

@@ -13,7 +13,8 @@
   const buttons = root => [...(root?.querySelectorAll('button,[role="button"]') || [])].filter(usable);
   const composer = () => document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"]');
   const text = el => (el?.value ?? el?.textContent ?? '').trim();
-  const stopButton = () => buttons(document.querySelector('main,[role="main"]')).find(el =>
+  // The composer/Stop control can be a sibling of the transcript, not inside main.
+  const stopButton = () => buttons(document).find(el =>
     el.matches('[data-testid="stop-button"]') || /^(stop generating|stop response|停止生成|停止產生|停止回應)$/i.test(label(el)));
   function attachmentPresent(editor) {
     const root = editor?.closest('form') || editor?.parentElement?.parentElement;
@@ -26,8 +27,14 @@
     const user = messages.filter(el => el.getAttribute('data-message-author-role') === 'user').at(-1);
     const afterUser = user ? messages.slice(messages.indexOf(user) + 1) : [];
     const assistant = afterUser.filter(el => el.getAttribute('data-message-author-role') === 'assistant').at(-1);
-    const turns = [...(main?.querySelectorAll('[data-testid^="conversation-turn-"],article') || [])];
-    const turn = assistant?.closest('[data-testid^="conversation-turn-"],article') || turns.at(-1);
+    const turnSelector = '[data-testid^="conversation-turn-"],article';
+    // A failed final response may be a separate turn after an interim assistant message.
+    // Ignore nested/quoted articles and historical turns preceding the latest user message.
+    const turns = [...(main?.querySelectorAll(turnSelector) || [])].filter(el =>
+      nativeUi(el) && !el.parentElement?.closest(turnSelector));
+    const turn = turns.filter(el => user && !el.contains(user)
+      && (user.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)).at(-1)
+      || assistant?.closest(turnSelector);
     const alerts = [...(main?.querySelectorAll('[role="alert"],[data-testid*="error"],.text-token-danger') || [])]
       .filter(el => nativeUi(el) && (!el.closest('[data-testid^="conversation-turn-"],article') || turn?.contains(el)));
     const errors = alerts.map(el => text(el)).join(' ').slice(0, 4000);
@@ -119,13 +126,28 @@
     for (let i = 0; i < 15; i++) {
       await new Promise(resolve => setTimeout(resolve, 100));
       const current = inspect();
-      if (!config.enabled || plan.generation !== config.generation || localPause || lastInput > started || plan.key !== P.conversationKey(location.href)
+      if (!config.enabled || plan.generation !== config.generation || localPause || lastInput > started
+          || current.sample.fingerprint !== plan.fingerprint || plan.key !== P.conversationKey(location.href)
           || current.sample.busy || current.sample.blocked || current.sample.manualStop || attachmentPresent(editor)
           || P.hash(text(editor)) !== P.hash(plan.prompt) || !editor.isConnected) { await pause(); return; }
       const root = editor.closest('form') || editor.parentElement?.parentElement;
       const send = buttons(root).find(el => el.matches('[data-testid="send-button"],#composer-submit-button')
         || /^(send prompt|send message|傳送提示|傳送訊息|發送訊息|发送消息)$/i.test(label(el)));
-      if (send) { send.click(); return; }
+      if (send) {
+        // The popup can disable/re-arm while we wait for the editor to enable Send.
+        // Re-authorize once, then re-read the DOM without another asynchronous gap.
+        const permission = await rpc({ type: 'commit_send', token: plan.token,
+          sample: current.sample, draftHash: P.hash(text(editor)) });
+        const final = inspect();
+        if (!permission.allowed || !permission.enabled || permission.generation !== plan.generation
+            || !config.enabled || config.generation !== plan.generation || localPause || lastInput > started
+            || plan.key !== P.conversationKey(location.href) || final.sample.fingerprint !== plan.fingerprint
+            || final.sample.busy || final.sample.blocked || final.sample.manualStop || attachmentPresent(editor)
+            || P.hash(text(editor)) !== P.hash(plan.prompt) || !editor.isConnected || !usable(send)) {
+          await pause(); return;
+        }
+        send.click(); return;
+      }
     }
     await pause(); // Leave the visible draft for the user if the native Send control is unavailable.
   }
