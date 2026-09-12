@@ -16,6 +16,32 @@
       <span id="stateBadge" class="badge">Ready</span>
     </header>
 
+    <section aria-labelledby="recoveryTitle">
+      <h2 id="recoveryTitle">Auto ChatGPT · 自動恢復</h2>
+      <label class="check">
+        <input id="recoveryEnabled" type="checkbox" disabled />
+        <span>Watch this chat / 監察目前對話</span>
+      </label>
+      <label class="check">
+        <input id="recoveryContinue" type="checkbox" />
+        <span>Also send “continue” after replies / 回應結束後自動繼續</span>
+      </label>
+      <p class="hint">Retry visible errors or Continue generating. Never stop active thinking/tools, overwrite drafts, or approve permissions.</p>
+      <details>
+        <summary>Recovery settings / 恢復設定</summary>
+        <label for="recoveryDelay">Quiet wait, seconds / 靜止等待秒數 (15–600)</label>
+        <input id="recoveryDelay" type="number" min="15" max="600" value="30" />
+        <label for="recoveryMax">Actions per user turn / 每次使用者訊息的操作上限 (1–20)</label>
+        <input id="recoveryMax" type="number" min="1" max="20" value="3" />
+        <label for="recoveryPrompt">Continue message / 繼續訊息</label>
+        <textarea id="recoveryPrompt" rows="4" maxlength="1000"></textarea>
+      </details>
+      <button id="recoveryApply" class="secondary" type="button" disabled>Apply / re-arm · 套用／重新啟用</button>
+      <p id="recoveryStatus" class="hint" role="status" aria-live="polite">Checking current chat…</p>
+      <p class="hint">Off by default. One tab per chat. Manual Stop disables recovery. Automatic messages use your ChatGPT quota.</p>
+    </section>
+
+
     <section>
       <label for="pathMode">Executable path</label>
       <select id="pathMode">
@@ -92,5 +118,6 @@
     <button id="openAppsBtn" class="linkBtn bottom">Open ChatGPT personal plugins</button>
   </main>
   <script type="module" src="popup.js"></script>
+  <script type="module" src="recovery-popup.js"></script>
 </body>
 </html>

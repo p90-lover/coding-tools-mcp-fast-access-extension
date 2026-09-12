@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "coding-tools-mcp Extension",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "minimum_chrome_version": "120",
-  "description": "Sync Coding Tools MCP with sender-bound OAuth popup authorization and app-specific connection verification.",
+  "description": "Sync Coding Tools MCP and optionally recover stopped ChatGPT replies with per-chat controls and duplicate protection.",
   "permissions": [
     "storage",
     "tabs",
@@ -22,7 +22,7 @@
     "file:///*"
   ],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "recovery-worker.js",
     "type": "module"
   },
   "action": {
@@ -59,6 +59,17 @@
       ],
       "js": [
         "oauth-content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "recovery-policy.js",
+        "recovery-content.js"
       ],
       "run_at": "document_idle"
     }
