@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "coding-tools-mcp Extension",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "minimum_chrome_version": "120",
   "description": "Sync Coding Tools MCP, show a ChatGPT HUD, and recover stopped replies with per-chat Watch/branch controls.",
   "permissions": [

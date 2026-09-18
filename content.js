@@ -1,5 +1,5 @@
 (() => {
-  const HELPER_VERSION = '0.0.10';
+  const HELPER_VERSION = '0.0.11';
   if (globalThis.__codingToolsMcpExtensionV001Loaded) return;
   globalThis.__codingToolsMcpExtensionV001Loaded = true;
   const STRINGS = {
@@ -327,12 +327,8 @@
   }
 
   /**
-   * True when the current page is the personal plugins list.
-   *
-   * The URL is the primary signal but not the only one: ChatGPT has renamed this route before, and
-   * a URL-only test then reports wrong_page for a list that is fully rendered in front of us. A
-   * page actually serving plugin cards is therefore accepted too. Detail pages are excluded — they
-   * carry plugin links of their own.
+   * True when the URL looks like a ChatGPT plugins/apps/connectors manager, including renamed
+   * settings-style routes. Conversation and plugin-detail URLs are excluded.
    */
   function isPotentialPluginsManagerUrl(urlString) {
     try {
@@ -384,10 +380,20 @@
     });
   }
 
+  /**
+   * True when the current page is the personal plugins list.
+   *
+   * The URL is the primary signal but not the only one: ChatGPT has renamed this route before, and
+   * a URL-only test then reports wrong_page for a list that is fully rendered in front of us. A
+   * manager-like route actually serving plugin cards or the plugins toolbar is therefore accepted
+   * too. Conversation pages and plugin detail pages are excluded — they carry plugin links of
+   * their own and must never be treated as the list.
+   */
   function isPersonalPluginsPage() {
-    // A chat page can show coding-tools-mcp in the composer menu. That is not the plugins grid.
-    // Clicking there opens the + menu and hits other projects. Only the plugins URL is allowed.
-    return isPersonalPluginsUrl(location.href);
+    if (isPersonalPluginsUrl(location.href)) return true;
+    if (isPluginDetailUrl(location.href)) return false;
+    if (!isPotentialPluginsManagerUrl(location.href)) return false;
+    return renderedPluginCardEvidence() || pluginsManagerToolbarPresent();
   }
 
   async function waitForPersonalPluginsPage(timeoutMs = 3000) {
@@ -596,68 +602,37 @@
     await clearPluginSearch();
     const gridCard = await waitFor(() => findGridArticle(appName), 2200, 150);
     if (gridCard) {
-      return { found: true, endpoint: '', appNode: gridCard, card: gridCard, detailsOpened: false, source: 'grid' };
+      const cardEndpoints = collectMcpEndpoints(gridCard);
+      return {
+        found: true,
+        endpoint: cardEndpoints.length === 1 ? cardEndpoints[0] : '',
+        appNode: gridCard,
+        card: gridCard,
+        detailsOpened: false,
+        source: 'grid',
+      };
     }
-    // Do not treat a sidebar chat or composer mention as the plugin, and do not click around to find it.
-    return { found: false, endpoint: '', appNode: null, card: null, detailsOpened: false };
-    const appNode = findExactAppNode(appName);
-    if (!appNode) return { found: false, endpoint: '', appNode: null, card: null, detailsOpened: false };
-    const card = appContainerFor(appNode, appName);
 
+    // A renamed manager route may paint the card outside the first <main>. Read the
+    // painted identity without clicking sidebar/composer chrome.
+    const appNode = findExactAppNode(appName);
+    if (!appNode || isUnsafeChrome(appNode)) {
+      return { found: false, endpoint: '', appNode: null, card: null, detailsOpened: false };
+    }
+    const card = appContainerFor(appNode, appName);
+    const cardRect = card?.getBoundingClientRect?.();
+    if (!card || isUnsafeChrome(card) || !(inPluginList(card) || isCardLikeRect(cardRect))) {
+      return { found: false, endpoint: '', appNode: null, card: null, detailsOpened: false };
+    }
     const cardEndpoints = collectMcpEndpoints(card);
     if (cardEndpoints.length === 1) {
       return { found: true, endpoint: cardEndpoints[0], appNode, card, detailsOpened: false, source: 'card' };
     }
-
-    const embedded = scriptEndpointForApp(appName);
-    if (embedded) {
-      return { found: true, endpoint: embedded, appNode, card, detailsOpened: false, source: 'script' };
-    }
-
-    // The card links to its own detail route. Reading that href is instant and clicks nothing,
-    // so it replaces the MAIN-world probe (a fixed 1.4s timeout that has never resolved here) and
-    // openExactAppDetails' trial-and-error loop, which activates candidate elements one at a time
-    // and waits 1.6s after each — up to ~16s of guessing to reach a URL the card already states.
     const linkedDetailUrl = cardDetailUrl(card);
     if (linkedDetailUrl) {
       return { found: true, endpoint: '', appNode, card, detailsOpened: false, detailUrl: linkedDetailUrl, source: 'card-link' };
     }
-
-    const mainWorldEndpoints = await mainWorldEndpointsForApp(appName);
-    if (mainWorldEndpoints.length === 1) {
-      return { found: true, endpoint: mainWorldEndpoints[0], appNode, card, detailsOpened: false, source: 'react' };
-    }
-
-    // Open only the exact app-name/row. The separate + action on the right is explicitly excluded.
-    const opened = await openExactAppDetails(appNode, appName);
-    if (opened.detailUrl) {
-      return { found: true, endpoint: '', appNode, card, detailsOpened: false, detailUrl: opened.detailUrl };
-    }
-    if (!opened.opened) {
-      return { found: true, endpoint: '', appNode, card, detailsOpened: false };
-    }
-
-    let details = opened.surface || activeSurface();
-    let urlInput = findInput('url', details);
-    let inputEndpoint = canonicalMcpEndpoint(urlInput?.value || '');
-    let detailsEndpoints = collectMcpEndpoints(details);
-    let endpoint = inputEndpoint || (detailsEndpoints.length === 1 ? detailsEndpoints[0] : '');
-
-    // Some builds first show an overview and expose configuration behind Manage/Settings.
-    if (!endpoint && containsAppIdentity(details.textContent, appName)) {
-      const manage = findClickablePreferExact(STRINGS.manage, details);
-      if (manage) {
-        manage.click();
-        await sleep(500);
-        details = activeSurface();
-        urlInput = findInput('url', details);
-        inputEndpoint = canonicalMcpEndpoint(urlInput?.value || '');
-        detailsEndpoints = collectMcpEndpoints(details);
-        endpoint = inputEndpoint || (detailsEndpoints.length === 1 ? detailsEndpoints[0] : '');
-      }
-    }
-
-    return { found: true, endpoint, appNode, card, detailsOpened: true, details, source: endpoint ? 'details' : '' };
+    return { found: true, endpoint: '', appNode, card, detailsOpened: false, source: 'name' };
   }
 
   function menuButtonForAppCard(card) {
@@ -704,8 +679,8 @@
   }
 
   function pluginGridArticles() {
-    const main = document.querySelector('main');
-    const roots = main ? [main] : [];
+    const root = pluginListRoot();
+    const roots = root ? [root] : [];
     const found = [];
     const add = (el) => {
       if (!el || found.includes(el) || !visible(el) || isUnsafeChrome(el)) return;
@@ -748,8 +723,21 @@
 
   function pluginListRoot() {
     // The plugins search is right-aligned. Grid cards sit to its left, so the
-    // list root is main, not the search field's column.
-    return document.querySelector('main') || document.body;
+    // list root is main, not the search field's column. ChatGPT settings SPA can
+    // leave a loading <main> mounted and append a later list <main> — prefer the
+    // one that already shows plugin-card evidence.
+    const mains = [...document.querySelectorAll('main')];
+    for (let i = mains.length - 1; i >= 0; i -= 1) {
+      const main = mains[i];
+      if (!visible(main) || isUnsafeChrome(main)) continue;
+      const hasListEvidence = [...main.querySelectorAll('a[href], article, [role="article"]')].some((el) => {
+        if (el.tagName === 'ARTICLE' || el.getAttribute('role') === 'article') return true;
+        return /\/plugins\/[^/?#]+/i.test(el.getAttribute('href') || '');
+      });
+      if (hasListEvidence) return main;
+    }
+    const visibleMains = mains.filter((el) => visible(el) && !isUnsafeChrome(el));
+    return visibleMains[visibleMains.length - 1] || document.body;
   }
 
   function isSidebarRow(el) {
@@ -760,12 +748,34 @@
     return rect.left < 220 && rect.width <= 280 && rect.height <= 56;
   }
 
+  function isCardLikeRect(rect) {
+    return Boolean(rect)
+      && rect.width >= 160
+      && rect.height >= 44
+      && rect.height <= 640
+      && rect.width <= 1400;
+  }
+
+  // Name labels inside a card are small and often left-aligned. They must not be discarded as
+  // sidebar rows when an ancestor already has plugin-card dimensions.
+  function hasCardLikeAncestor(el) {
+    const root = pluginListRoot();
+    let current = el;
+    for (let i = 0; i < 12 && current && current !== root && current !== document.body; i += 1, current = current.parentElement) {
+      if (isUnsafeChrome(current)) break;
+      if (isCardLikeRect(current.getBoundingClientRect())) return true;
+    }
+    return false;
+  }
+
   function inPluginList(el) {
-    if (!el || isSidebarRow(el)) return false;
+    if (!el || isUnsafeChrome(el)) return false;
     const root = pluginListRoot();
     if (!root?.contains(el)) return false;
     const rect = el.getBoundingClientRect();
-    return rect.width >= 8 && rect.height >= 8;
+    if (rect.width < 8 || rect.height < 8) return false;
+    if (isSidebarRow(el) && !hasCardLikeAncestor(el)) return false;
+    return true;
   }
 
   function labelIsApp(value, appName) {
@@ -811,7 +821,7 @@
       if (isUnsafeChrome(current)) break;
       if (!inPluginList(current)) continue;
       const rect = current.getBoundingClientRect();
-      if (rect.width < 160 || rect.height < 44 || rect.height > 640 || rect.width > 1400) continue;
+      if (!isCardLikeRect(rect)) continue;
       if (!exactNameIn(current, appName) || otherAppTitleIn(current, appName)) continue;
       best = current;
       if (dotsButtonIn(current, appName)) return current;
@@ -826,11 +836,10 @@
     const hits = pluginNameNodes(appName);
     for (const nameEl of hits) {
       const card = cardAroundName(nameEl, appName);
-      if (!card) continue;
-      const dots = dotsButtonIn(card, appName) || dotsNearName(nameEl, card);
-      if (dots && card.contains(dots) && !isForbiddenDotsTarget(dots)) return card;
+      // Existence does not require the ⋯ control to have painted. Requiring it treated a
+      // fully rendered nested card as absent and sent Sync down the create path.
+      if (card && inPluginList(card)) return card;
     }
-    // No clickable card menu: do not invent a fake card from a bare name hit.
     return null;
   }
 
@@ -1037,7 +1046,7 @@
    * Only the coding-tools-mcp grid card. If that card is not unique, click nothing.
    */
   async function deleteViaManage(appName) {
-    if (!isPersonalPluginsUrl(location.href)) return { removed: false, reason: 'wrong_page' };
+    if (!isPersonalPluginsPage()) return { removed: false, reason: 'wrong_page' };
     await clearPluginSearch();
     let article = await waitFor(() => findGridArticle(appName), 2200, 150);
     if (!article) {
@@ -1249,7 +1258,7 @@
    * bare + controls.
    */
   function createControl() {
-    if (!isPersonalPluginsUrl(location.href)) return null;
+    if (!isPersonalPluginsPage() && !isPotentialPluginsManagerUrl(location.href)) return null;
     const outsideDialogs = allClickable(document).filter((el) => !el.closest('[role="dialog"], form, [data-testid*="composer"]'));
 
     const exact = outsideDialogs.find((el) => textMatches(el, EXACT_CREATE_LABELS, true));
@@ -1315,7 +1324,10 @@
   ];
 
   function pluginsPageRenderState(appName) {
-    if (findGridArticle(appName)) return 'app';
+    // Readiness is about whether this app's identity has painted, not whether its ⋯ menu is
+    // clickable yet. findGridArticle is the delete/create gate; using it here reported a
+    // late-rendered name+link card as mere 'cards' and missed the mutation wakeup.
+    if (findExactAppNode(appName) || findGridArticle(appName)) return 'app';
     if (pluginCardLinks().length) return 'cards';
     // Search alone is NOT readiness: it paints before the grid. Creating on search-only
     // skips delete when the existing card has not mounted yet.
@@ -1342,12 +1354,13 @@
    *   'unknown' — nothing trustworthy rendered; absence cannot be inferred
    */
   async function waitForPluginsPageReady(appName) {
-    // Give ChatGPT time to paint the grid. 1.5s was too short and created before delete.
+    // Fail closed without the old 8s/12s stall. DOM-mutation wakeups make a real grid appear
+    // well before this bound; an unrendered search-only shell should not block Sync that long.
     const listed = await waitFor(() => {
       if (!document.body || !normalize(document.body.textContent)) return null;
       const state = pluginsPageRenderState(appName);
       return state === 'unknown' ? null : state;
-    }, 12000, 250);
+    }, 5000, 250);
     return listed || pluginsPageRenderState(appName);
   }
 
@@ -1363,7 +1376,7 @@
   }
 
   async function openCreateFormStrict() {
-    if (!isPersonalPluginsUrl(location.href)) return false;
+    if (!isPersonalPluginsPage()) return false;
     if (createFormPresent()) return true;
 
     // Deleting an app leaves ChatGPT's Settings modal open over the plugins list. The create control
@@ -1938,7 +1951,7 @@
     }
     if (payload?.jobId) activePrepareJobId = payload.jobId;
 
-    if (!isPersonalPluginsUrl(location.href)) {
+    if (!isPersonalPluginsUrl(location.href) && !isPotentialPluginsManagerUrl(location.href)) {
       activePrepareJobId = '';
       return {
         ok: false,
@@ -1983,9 +1996,9 @@
     // After clearing search, wait once more so filtered-away cards remount before we decide.
     await waitForPluginsPageReady(payload.appName);
     const inspection = await inspectExistingApp(payload.appName);
-    // Only a real plugins-grid card counts. Sidebar chats / search leftovers named
-    // coding-tools-mcp are not an installed MCP app.
-    const installed = Boolean(findGridArticle(payload.appName));
+    // A real plugins-grid card counts. inspectExistingApp already refuses sidebar/composer chrome,
+    // so a renamed-route card painted outside the first <main> still enters delete-first replace.
+    const installed = Boolean(findGridArticle(payload.appName) || inspection.found);
 
     if (installed) {
       // Every sync is a clean replacement, even when the endpoint is unchanged.
@@ -2256,7 +2269,7 @@
         sendResponse(observeAppConnection(appName));
         return false;
       }
-      if (!isPersonalPluginsUrl(location.href)) {
+      if (!isPersonalPluginsPage()) {
         sendResponse({ ok: true, stage: 'wrong_page' });
         return false;
       }
@@ -2264,7 +2277,7 @@
       // The app can already exist and merely be unauthorized — e.g. creation succeeded but the
       // connect control was not reachable yet. Retry it here so a live job recovers on its own
       // instead of idling until the watchdog gives up.
-      if (normalize(message.authType) === 'oauth' && isPersonalPluginsUrl(location.href) && findGridArticle(appName)) {
+      if (normalize(message.authType) === 'oauth' && isPersonalPluginsPage() && findGridArticle(appName)) {
         openConnectFlow(appName)
           .then((result) => sendResponse({ ok: true, stage: result.opened ? 'authorizing' : 'finalizer_resumed', connect: result }))
           .catch(() => sendResponse({ ok: true, stage: 'finalizer_resumed' }));
