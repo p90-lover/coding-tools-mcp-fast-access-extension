@@ -18,6 +18,7 @@ assert.ok(manifest.permissions.includes('offscreen'));
 assert.ok(manifest.host_permissions.includes('https://*.trycloudflare.com/*'));
 assert.ok(manifest.content_scripts.some((entry) => entry.matches?.includes('https://*.trycloudflare.com/*') && entry.js?.includes('oauth-content.js')));
 assert.ok(manifest.content_scripts.some((entry) => entry.world === 'MAIN' && entry.js?.includes('page-bridge.js')));
+assert.ok(manifest.content_scripts.some((entry) => entry.js?.includes('recovery-hud.js') && entry.matches?.includes('https://*.chatgpt.com/*')));
 
 assert.match(background, /CHATGPT_PERSONAL_PLUGINS_URL = 'https:\/\/chatgpt\.com\/plugins\?view=personal'/);
 assert.match(background, /openPersonalPluginsTab\(job\.chatGptTabId\)/);

@@ -9,11 +9,28 @@ export function cleanExecutablePath(value = '') {
   return String(value).trim().replace(/^\s*["']|["']\s*$/g, '');
 }
 
-export function deriveProfilesPath(executablePath = DEFAULT_EXE_PATH) {
+function windowsUserRoot(executablePath = DEFAULT_EXE_PATH) {
   const clean = cleanExecutablePath(executablePath).replaceAll('/', '\\');
-  const userMatch = clean.match(/^([A-Za-z]:\\Users\\[^\\]+)\\/i);
-  if (!userMatch) return '';
-  return `${userMatch[1]}\\AppData\\Roaming\\coding-tools-mcp-desktop\\data\\profiles.json`;
+  return clean.match(/^([A-Za-z]:\\Users\\[^\\]+)\\/i)?.[1] || '';
+}
+
+export function listProfilesPathCandidates(executablePath = DEFAULT_EXE_PATH) {
+  const user = windowsUserRoot(executablePath);
+  if (!user) return [];
+  // Desktop 0.7.0-rc.x stores config under AppData, not beside the EXE.
+  // Prefer Roaming coding-tools-mcp-desktop, then Local Coding Tools MCP data dirs.
+  return [
+    `${user}\\AppData\\Roaming\\coding-tools-mcp-desktop\\data\\profiles.json`,
+    `${user}\\AppData\\Roaming\\coding-tools-mcp-desktop\\profiles.json`,
+    `${user}\\AppData\\Roaming\\Coding Tools\\data\\profiles.json`,
+    `${user}\\AppData\\Roaming\\Coding Tools MCP\\data\\profiles.json`,
+    `${user}\\AppData\\Local\\Coding Tools MCP\\data\\profiles.json`,
+    `${user}\\AppData\\Local\\coding-tools-mcp-desktop\\data\\profiles.json`,
+  ];
+}
+
+export function deriveProfilesPath(executablePath = DEFAULT_EXE_PATH) {
+  return listProfilesPathCandidates(executablePath)[0] || '';
 }
 
 export function windowsPathToFileUrl(windowsPath) {

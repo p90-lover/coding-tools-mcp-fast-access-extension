@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "coding-tools-mcp Extension",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "minimum_chrome_version": "120",
-  "description": "Sync Coding Tools MCP and optionally recover stopped ChatGPT replies with per-chat controls and duplicate protection.",
+  "description": "Sync Coding Tools MCP, show a ChatGPT HUD, and recover stopped replies with per-chat Watch/branch controls.",
   "permissions": [
     "storage",
     "tabs",
@@ -65,11 +65,13 @@
     {
       "matches": [
         "https://chatgpt.com/*",
+        "https://*.chatgpt.com/*",
         "https://chat.openai.com/*"
       ],
       "js": [
         "recovery-policy.js",
-        "recovery-content.js"
+        "recovery-content.js",
+        "recovery-hud.js"
       ],
       "run_at": "document_idle"
     }

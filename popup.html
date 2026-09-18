@@ -18,6 +18,7 @@
 
     <section aria-labelledby="recoveryTitle">
       <h2 id="recoveryTitle">Auto ChatGPT · 自動恢復</h2>
+      <p id="recoveryChat" class="mono">Chat ID: checking…</p>
       <label class="check">
         <input id="recoveryEnabled" type="checkbox" disabled />
         <span>Watch this chat / 監察目前對話</span>
@@ -26,7 +27,15 @@
         <input id="recoveryContinue" type="checkbox" />
         <span>Also send “continue” after replies / 回應結束後自動繼續</span>
       </label>
-      <p class="hint">Retry visible errors or Continue generating. Never stop active thinking/tools, overwrite drafts, or approve permissions.</p>
+      <label class="check">
+        <input id="recoveryLongTask" type="checkbox" />
+        <span>Long task / 長任務</span>
+      </label>
+      <label class="check">
+        <input id="recoveryDoNotSpam" type="checkbox" checked />
+        <span>Do not spam / 不要洗版</span>
+      </label>
+      <p class="hint">Watch, Long task, Do not spam and the continue message save immediately. Re-arm only resets the per-turn budget. Defaults: Do not spam ON, Long task OFF, continue <code>@coding-tools-mcp keep going</code>.</p>
       <details>
         <summary>Recovery settings / 恢復設定</summary>
         <label for="recoveryDelay">Quiet wait, seconds / 靜止等待秒數 (15–600)</label>
@@ -34,11 +43,11 @@
         <label for="recoveryMax">Actions per user turn / 每次使用者訊息的操作上限 (1–20)</label>
         <input id="recoveryMax" type="number" min="1" max="20" value="3" />
         <label for="recoveryPrompt">Continue message / 繼續訊息</label>
-        <textarea id="recoveryPrompt" rows="4" maxlength="1000"></textarea>
+        <textarea id="recoveryPrompt" rows="4" maxlength="1000">@coding-tools-mcp keep going</textarea>
       </details>
-      <button id="recoveryApply" class="secondary" type="button" disabled>Apply / re-arm · 套用／重新啟用</button>
+      <button id="recoveryApply" class="secondary" type="button" disabled>Re-arm · 重新啟用</button>
       <p id="recoveryStatus" class="hint" role="status" aria-live="polite">Checking current chat…</p>
-      <p class="hint">Off by default. One tab per chat. Manual Stop disables recovery. Automatic messages use your ChatGPT quota.</p>
+      <p class="hint">Off by default. One tab per chat. Turning Watch OFF does not auto-rearm. Manual Stop disables recovery. Automatic messages use your ChatGPT quota.</p>
     </section>
 
 
@@ -50,7 +59,7 @@
       </select>
       <input id="exePath" list="recentPaths" spellcheck="false" autocomplete="off" />
       <datalist id="recentPaths"></datalist>
-      <p class="hint">Change this path if Coding Tools MCP is installed somewhere else.</p>
+      <p class="hint">Desktop 0.7.0-rc.x keeps <code>profiles.json</code> under AppData — Roaming <code>coding-tools-mcp-desktop</code> or Local <code>Coding Tools MCP</code> — not beside the EXE. Capture/sync tries those folders automatically.</p>
     </section>
 
     <details>
@@ -113,7 +122,7 @@
     </div>
 
     <p id="diagnostics" class="mono">Checking permissions…</p>
-    <p class="hint">Manifest V3 service workers may sleep. v0.0.1 resumes safely, validates the rendered ChatGPT manager page, deletes exact-name apps, and recreates one clean replacement.</p>
+    <p class="hint">Manifest V3 service workers may sleep. v0.0.10 syncs the ChatGPT HUD with this popup, captures Desktop AppData config, and recreates one clean <strong>coding-tools-mcp</strong> replacement.</p>
     <p id="status" class="status">Waiting.</p>
     <button id="openAppsBtn" class="linkBtn bottom">Open ChatGPT personal plugins</button>
   </main>

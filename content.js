@@ -1,5 +1,5 @@
 (() => {
-  const HELPER_VERSION = '0.0.7';
+  const HELPER_VERSION = '0.0.10';
   if (globalThis.__codingToolsMcpExtensionV001Loaded) return;
   globalThis.__codingToolsMcpExtensionV001Loaded = true;
   const STRINGS = {

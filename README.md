@@ -1,4 +1,50 @@
+# v0.0.10 — HUD, recovery integration, Desktop AppData paths / HUD、恢復整合、桌面 AppData 路徑
+
+## English
+
+Chrome MV3 helper for Coding Tools MCP. This build adds a ChatGPT page HUD with working Watch / Long task / Do not spam / continue / Re-arm controls, keeps the existing personal-plugins Sync + OAuth flow, and reads Desktop **0.7.0-rc.x** config from AppData instead of beside the EXE.
+
+Do **not** mix this unpacked folder with the legacy `coding-tools-mcp-chrome-extension-v0.3.3` zip.
+
+### Recovery and HUD
+
+- Apply/Watch identifies the chat from the **page URL**, then a Chat ID fallback, then `tab.url`. `www.chatgpt.com` and `/c/{id}/branch` SPA routes are accepted.
+- Default continue message: `@coding-tools-mcp keep going` (bare `keep going` is normalized).
+- Thinking failed → `send_continue`. MCP disabled/FORBIDDEN → native Branch, then arm the new `/c/{id}`. Never keep-going on the disabled source.
+- Do not spam defaults **on**; Long task defaults **off**. Those prefs, Watch, and the continue message save without Apply. Re-arm only resets the per-turn budget. Turning Watch OFF does not auto-rearm.
+- HUD HTTP log is collapsed by default. Model display uses the network conversation payload: never Recents/MIME as Running; Extra High is effort-only.
+
+### Desktop pairing / capture
+
+Default EXE remains:
+
+```text
+C:\Users\simon\AppData\Local\Coding Tools MCP\coding-tools-mcp-desktop.exe
+```
+
+Capture/sync tries these `profiles.json` locations automatically (override still wins):
+
+```text
+%AppData%\coding-tools-mcp-desktop\data\profiles.json
+%AppData%\coding-tools-mcp-desktop\profiles.json
+%AppData%\Coding Tools\data\profiles.json
+%AppData%\Coding Tools MCP\data\profiles.json
+%LocalAppData%\Coding Tools MCP\data\profiles.json
+%LocalAppData%\coding-tools-mcp-desktop\data\profiles.json
+```
+
+Reload the extension and existing ChatGPT tabs once after upgrading. Enable **Allow access to file URLs** for capture. Recovery itself does not need local Desktop files.
+
+## 繁體中文
+
+此版在 ChatGPT 頁面加入可操作的 HUD（監察／長任務／不要洗版／繼續訊息／重新啟用），保留個人插件 Sync + OAuth，並從 Desktop **0.7.0-rc.x** 的 AppData 讀取設定，而不是 EXE 旁邊的 `profiles.json`。
+
+請勿與舊版 `coding-tools-mcp-chrome-extension-v0.3.3` zip 混用。
+
+---
+
 # v0.0.7 — Desktop v0.4.3-rc.3 compatibility / 相容性修正
+
 
 ## English
 
