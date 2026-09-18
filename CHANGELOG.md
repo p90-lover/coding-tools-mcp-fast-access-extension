@@ -1,5 +1,12 @@
 ﻿# Changelog
 
+## v0.0.11 - 2026-09-18
+
+- Restore ChatGPT personal-plugins page detection: renamed manager routes such as `/settings/connectors` are accepted once plugin-card or toolbar evidence is in the DOM. Conversation and plugin-detail pages still fail closed.
+- Detect nested plugin cards whose name lives in a left column while the ⋯/Actions control is a sibling, instead of treating that layout as "app absent" and opening Create.
+- Wake plugins-list readiness from the painted app identity (not only a clickable grid menu) so a late-rendered card is `app` rather than `cards`.
+- Fail closed on an unrendered search-only list in 5s, not 12s.
+
 ## v0.0.10 - 2026-09-18
 
 - Add an on-page ChatGPT HUD that matches the popup chrome and wires Watch, Long task, Do not spam, continue message, and Re-arm as real controls.

@@ -1,6 +1,8 @@
-# v0.0.10 — HUD, recovery integration, Desktop AppData paths / HUD、恢復整合、桌面 AppData 路徑
+# v0.0.11 — Personal plugins page detection / 個人插件頁偵測
 
 ## English
+
+v0.0.11 fixes ChatGPT personal-plugins page detection and plugins-list readiness (renamed manager routes, nested cards, mutation-wakeup `app` state, 5s fail-closed). HUD / recovery / Desktop AppData behavior is unchanged from v0.0.10.
 
 Chrome MV3 helper for Coding Tools MCP. This build adds a ChatGPT page HUD with working Watch / Long task / Do not spam / continue / Re-arm controls, keeps the existing personal-plugins Sync + OAuth flow, and reads Desktop **0.7.0-rc.x** config from AppData instead of beside the EXE.
 
@@ -36,6 +38,8 @@ Capture/sync tries these `profiles.json` locations automatically (override still
 Reload the extension and existing ChatGPT tabs once after upgrading. Enable **Allow access to file URLs** for capture. Recovery itself does not need local Desktop files.
 
 ## 繁體中文
+
+v0.0.11 修好個人插件頁偵測與列表就緒判斷（更名後的 manager 路由、巢狀卡片、DOM 變更喚醒、5 秒失敗關閉）。HUD／恢復／Desktop AppData 行為與 v0.0.10 相同。
 
 此版在 ChatGPT 頁面加入可操作的 HUD（監察／長任務／不要洗版／繼續訊息／重新啟用），保留個人插件 Sync + OAuth，並從 Desktop **0.7.0-rc.x** 的 AppData 讀取設定，而不是 EXE 旁邊的 `profiles.json`。
 

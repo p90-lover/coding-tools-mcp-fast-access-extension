@@ -466,8 +466,10 @@ function revealCreateFormOnClick(button, body) {
   });
 
   assert.equal(result.stage, 'remove');
-  assert.match(result.message, /remove_not_available/,
+  assert.match(result.message, /remove_not_available|manage_not_reachable/,
     'nested-card actions must be reached instead of failing with app_menu_not_found');
+  assert.doesNotMatch(result.message || '', /app_menu_not_found/,
+    'the nested card ⋯ control must be found; Delete then fails closed via Manage');
 }
 
 // 25. The toolbar (search + create) paints before the plugin cards. Treating it as "ready" made the
