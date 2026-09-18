@@ -13,9 +13,11 @@ section, details { display: grid; gap: 7px; }
 label, summary { font-size: 12px; font-weight: 650; }
 summary { cursor: pointer; }
 input, select, button { font: inherit; }
-input, select { width: 100%; min-height: 36px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 9px; background: color-mix(in srgb, Canvas 96%, CanvasText 4%); color: CanvasText; padding: 8px 10px; font-size: 12px; }
+input, select, textarea { width: 100%; min-height: 36px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 9px; background: color-mix(in srgb, Canvas 96%, CanvasText 4%); color: CanvasText; padding: 8px 10px; font-size: 12px; }
+textarea { min-height: 72px; resize: vertical; }
 input[readonly] { opacity: .8; }
-.hint, .mono, .status { margin: 0; font-size: 11px; line-height: 1.45; opacity: .72; overflow-wrap: anywhere; }
+.hint, .mono, .status { margin: 0; font-size: 11px; line-height: 1.45; opacity: .72; overflow-wrap: anywhere; white-space: pre-wrap; }
+#recoveryStatus { opacity: .9; font-weight: 650; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin-top: 4px; }
 .grid { gap: 10px; }
 .check { display: flex; align-items: flex-start; gap: 8px; font-weight: 500; line-height: 1.35; }

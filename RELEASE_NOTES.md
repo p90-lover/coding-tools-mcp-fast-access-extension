@@ -1,4 +1,11 @@
+# v0.0.10 — HUD + recovery integration + Desktop AppData paths
+
+See `RELEASE_NOTES_v0.0.10.md` and `CHATGPT_RECOVERY.md`. Load unpacked, reload ChatGPT tabs, and do not mix with `coding-tools-mcp-chrome-extension-v0.3.3`.
+
+## Earlier release documentation / 過往版本文件
+
 # v0.0.7 — Desktop v0.4.3-rc.3 compatibility / 相容性修正
+
 
 ## English
 

@@ -3,14 +3,14 @@ import {
   blocksNewSync,
   DEFAULT_EXE_PATH,
   cleanExecutablePath,
-  deriveProfilesPath,
+  listProfilesPathCandidates,
   windowsPathToFileUrl,
   selectWorkspaceSnapshot,
   isRemoteHttpsMcpUrl,
   oauthUrlsFromMcpUrl,
 } from './lib.mjs';
 
-const HELPER_VERSION = '0.0.7';
+const HELPER_VERSION = '0.0.10';
 const CHATGPT_HOME_URL = 'https://chatgpt.com/';
 const CHATGPT_PERSONAL_PLUGINS_URL = 'https://chatgpt.com/plugins?view=personal';
 const CHATGPT_PATTERNS = ['https://chatgpt.com/*', 'https://*.chatgpt.com/*', 'https://chat.openai.com/*'];
@@ -161,29 +161,41 @@ async function readLocalSnapshot(preferredWorkspaceId = '') {
   }
 
   const settings = await getSettings();
-  const profilesPath = settings.profilesPathOverride || deriveProfilesPath(settings.executablePath);
-  if (!profilesPath) {
-    const error = new Error('Could not derive profiles.json from the executable path. Set an advanced profiles.json override.');
+  const candidates = settings.profilesPathOverride
+    ? [settings.profilesPathOverride]
+    : listProfilesPathCandidates(settings.executablePath);
+  if (!candidates.length) {
+    const error = new Error('Could not derive profiles.json from the executable path. Set an advanced profiles.json override. Desktop 0.7 stores config under AppData (Roaming coding-tools-mcp-desktop / Local Coding Tools MCP), not beside the EXE.');
     error.code = 'PROFILES_PATH_INVALID';
     throw error;
   }
 
-  const fileUrl = windowsPathToFileUrl(profilesPath);
-  let response;
-  try {
-    response = await fetch(fileUrl, { cache: 'no-store' });
-  } catch (cause) {
-    const error = new Error(`Unable to read Coding Tools MCP state at ${profilesPath}. Check file URL access and the path.`);
-    error.code = 'PROFILES_READ_FAILED';
-    error.cause = cause;
-    throw error;
+  let lastError = null;
+  for (const profilesPath of candidates) {
+    try {
+      const response = await fetch(windowsPathToFileUrl(profilesPath), { cache: 'no-store' });
+      if (!response.ok) {
+        lastError = new Error(`Unable to read ${profilesPath} (HTTP ${response.status}).`);
+        continue;
+      }
+      const raw = await response.text();
+      const data = JSON.parse(raw);
+      const snapshot = selectWorkspaceSnapshot(data, preferredWorkspaceId || settings.selectedWorkspaceId);
+      return {
+        ...snapshot,
+        profilesPath,
+        profilesPathCandidates: candidates,
+        executablePath: settings.executablePath,
+      };
+    } catch (cause) {
+      lastError = cause;
+    }
   }
-  if (!response.ok) throw new Error(`Unable to read ${profilesPath} (HTTP ${response.status}).`);
 
-  const raw = await response.text();
-  const data = JSON.parse(raw);
-  const snapshot = selectWorkspaceSnapshot(data, preferredWorkspaceId || settings.selectedWorkspaceId);
-  return { ...snapshot, profilesPath, executablePath: settings.executablePath };
+  const error = new Error(`Unable to read Coding Tools MCP state. Tried AppData paths (not beside the EXE): ${candidates.join(' | ')}. Enable file URL access or set an advanced profiles.json override.`);
+  error.code = 'PROFILES_READ_FAILED';
+  error.cause = lastError;
+  throw error;
 }
 
 function originPatternFor(urlString) {

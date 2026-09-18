@@ -3,6 +3,7 @@ import {
   DEFAULT_EXE_PATH,
   blocksNewSync,
   deriveProfilesPath,
+  listProfilesPathCandidates,
   normalizePublicMcpUrl,
   oauthUrlsFromMcpUrl,
   selectWorkspaceSnapshot,
@@ -12,6 +13,16 @@ assert.equal(
   deriveProfilesPath(DEFAULT_EXE_PATH),
   String.raw`C:\Users\simon\AppData\Roaming\coding-tools-mcp-desktop\data\profiles.json`,
 );
+assert.deepEqual(
+  listProfilesPathCandidates(DEFAULT_EXE_PATH).slice(0, 2),
+  [
+    String.raw`C:\Users\simon\AppData\Roaming\coding-tools-mcp-desktop\data\profiles.json`,
+    String.raw`C:\Users\simon\AppData\Roaming\coding-tools-mcp-desktop\profiles.json`,
+  ],
+);
+assert.ok(listProfilesPathCandidates(DEFAULT_EXE_PATH).includes(
+  String.raw`C:\Users\simon\AppData\Local\Coding Tools MCP\data\profiles.json`,
+));
 
 assert.equal(normalizePublicMcpUrl('https://demo.example.com/'), 'https://demo.example.com/mcp');
 assert.equal(blocksNewSync({ phase: 'queued', updatedAt: 950 }, 1000), true);

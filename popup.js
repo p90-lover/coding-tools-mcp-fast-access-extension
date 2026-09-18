@@ -1,4 +1,4 @@
-import { DEFAULT_EXE_PATH, deriveProfilesPath } from './lib.mjs';
+import { DEFAULT_EXE_PATH, listProfilesPathCandidates } from './lib.mjs';
 
 const $ = (id) => document.getElementById(id);
 const pathMode = $('pathMode');
@@ -42,8 +42,20 @@ function setBusy(busy) {
 }
 
 function updateDerivedPath() {
-  const value = profilesPath.value.trim() || deriveProfilesPath(exePath.value);
-  derivedPath.textContent = value ? `Reading: ${value}` : 'Could not derive profiles.json from this executable path.';
+  const override = profilesPath.value.trim();
+  if (override) {
+    derivedPath.textContent = `Reading override: ${override}`;
+    return;
+  }
+  const candidates = listProfilesPathCandidates(exePath.value);
+  if (!candidates.length) {
+    derivedPath.textContent = 'Could not derive AppData profiles.json from this executable path.';
+    return;
+  }
+  const resolved = latestSnapshot?.profilesPath;
+  derivedPath.textContent = resolved
+    ? `Reading: ${resolved}`
+    : `Will try AppData (not beside EXE):\n${candidates.join('\n')}`;
 }
 
 function renderRecentPaths() {
@@ -141,6 +153,7 @@ async function readLocal() {
   if (!response?.ok) throw Object.assign(new Error(response?.error || 'Capture failed.'), { code: response?.code });
   latestSnapshot = response.snapshot;
   populateWorkspaces(response.snapshot);
+  updateDerivedPath();
   return response.snapshot;
 }
 
@@ -151,7 +164,7 @@ async function capture() {
     const snapshot = await readLocal();
     fileAccessWarning.classList.add('hidden');
     const selected = snapshot.selected || {};
-    setStatus(`Captured ${selected.name || 'workspace'}: MCP URL + ${selected.authType === 'oauth' ? 'OAuth Client ID/Secret + authorization data' : selected.authType || 'auth'}.`, 'Captured');
+    setStatus(`Captured ${selected.name || 'workspace'} from ${snapshot.profilesPath}: MCP URL + ${selected.authType === 'oauth' ? 'OAuth Client ID/Secret + authorization data' : selected.authType || 'auth'}.`, 'Captured');
     return snapshot;
   } catch (error) {
     if (error.code === 'FILE_ACCESS_DISABLED') fileAccessWarning.classList.remove('hidden');

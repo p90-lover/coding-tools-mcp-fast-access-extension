@@ -110,4 +110,59 @@
       detail: JSON.stringify({ requestId, ...result }),
     }));
   });
+
+  // HUD network tap: method/path/status only. Never emit bodies, cookies, or Authorization.
+  if (!globalThis.__ctmHudNetTap) {
+    globalThis.__ctmHudNetTap = true;
+    const emit = (entry) => {
+      try { document.dispatchEvent(new CustomEvent('ctm-hud-http', { detail: entry })); } catch {}
+    };
+    const hostOk = (hostname) => {
+      const host = String(hostname || '').toLowerCase().replace(/^www\./, '');
+      return host === 'chatgpt.com' || host.endsWith('.chatgpt.com') || host === 'chat.openai.com';
+    };
+    const sanitize = (rawUrl) => {
+      try {
+        const url = new URL(rawUrl, location.href);
+        if (!hostOk(url.hostname)) return null;
+        const path = url.pathname.replace(/\/[0-9a-f]{8,}/gi, '/…');
+        return { path, conversation: /\/(backend-api|api)\/.*conversation/i.test(url.pathname) };
+      } catch { return null; }
+    };
+    const readModel = async (res, conversation) => {
+      if (!conversation) return;
+      const type = String(res.headers.get('content-type') || '');
+      if (!/json|event-stream|text\/plain/i.test(type)) return;
+      try {
+        const clone = res.clone();
+        const body = await clone.text();
+        const snippet = body.slice(0, 20000);
+        if (/\bFORBIDDEN\b|mcp.{0,24}disabled|tool.{0,24}disabled/i.test(snippet)) {
+          emit({ mcpDisabled: true, method: 'HINT', path: '/mcp', status: 403, ms: 0 });
+        }
+        const model = snippet.match(/"(?:model|model_slug|default_model_slug)"\s*:\s*"([^"]{1,80})"/i)?.[1];
+        const effort = snippet.match(/"(?:reasoning_effort|effort)"\s*:\s*"([^"]{1,40})"/i)?.[1];
+        if (model || effort) emit({ model, effort, method: 'MODEL', path: '/conversation', status: res.status, ms: 0 });
+      } catch { /* HUD must never fail the page request. */ }
+    };
+    const origFetch = window.fetch;
+    window.fetch = async function tappedFetch(input, init) {
+      const started = Date.now();
+      const rawUrl = typeof input === 'string' ? input : input?.url;
+      const method = String(init?.method || input?.method || 'GET').toUpperCase();
+      const meta = sanitize(rawUrl);
+      try {
+        const res = origFetch.apply(this, arguments);
+        const resolved = await res;
+        if (meta) {
+          emit({ method, path: meta.path, status: resolved.status, ms: Date.now() - started });
+          void readModel(resolved, meta.conversation);
+        }
+        return resolved;
+      } catch (error) {
+        if (meta) emit({ method, path: meta.path, status: 0, ms: Date.now() - started });
+        throw error;
+      }
+    };
+  }
 })();

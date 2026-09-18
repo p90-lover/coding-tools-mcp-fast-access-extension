@@ -1,5 +1,18 @@
 ﻿# Changelog
 
+## v0.0.10 - 2026-09-18
+
+- Add an on-page ChatGPT HUD that matches the popup chrome and wires Watch, Long task, Do not spam, continue message, and Re-arm as real controls.
+- Apply/Watch uses the page URL first, then a Chat ID fallback, and normalizes `www.chatgpt.com` / `/c/{id}/branch` SPA routes so a visible Chat ID no longer fails the worker.
+- Default continue prompt is `@coding-tools-mcp keep going`; a bare `keep going` is normalized to that tagged form.
+- Thinking failed sends `send_continue` instead of clicking the Thinking-failed retry icon.
+- MCP disabled/FORBIDDEN sends `send_branch` and arms Watch on the new `/c/{id}`; keep-going is never sent on the disabled source chat.
+- Model line ignores Recents/MIME and treats Extra High as effort-only; network model wins over a stale mini label.
+- `snapshot()` copies `mcpDisabled` (and related booleans) instead of dropping them.
+- Autosave Watch / Long task / Do not spam / continue message without Apply. Do not spam defaults on; Long task defaults off. Turning Watch OFF does not auto-rearm. Repeat keep-going is held unless Long task is on.
+- Capture/sync tries Desktop 0.7 AppData paths (`Roaming\coding-tools-mcp-desktop` and `Local\Coding Tools MCP\data`), not `profiles.json` beside the EXE.
+- HTTP log in the HUD is collapsed by default. Popup and HUD prefs stay in sync.
+
 ## v0.0.3 - 2026-09-10
 
 - After a successful delete, always return to the personal plugins page and create the replacement.
